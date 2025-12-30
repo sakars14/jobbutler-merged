@@ -1,0 +1,16 @@
+greenhouse:
+  full_name: "{{profile.name}}"
+  email: "{{profile.contact.email}}"
+  phone: "{{profile.contact.phone}}"
+  resume_pdf: "resume/Sakar_Resume_Universal_2pg.pdf"
+  answers:
+    work_auth: "Need sponsorship outside India: {{profile.visa.needs_sponsorship_outside_india}}"
+    notice_period_days: "30"
+
+lever:
+  full_name: "{{profile.name}}"
+  email: "{{profile.contact.email}}"
+  phone: "{{profile.contact.phone}}"
+  resume_pdf: "resume/Sakar_Resume_Universal_2pg.pdf"
+  answers:
+    notice_period_days: "30"

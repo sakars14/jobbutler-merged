@@ -1,0 +1,82 @@
+{
+  "name": "Sakar Srivastava",
+  "contact": {
+    "email": "srivastavasakar@gmail.com",
+    "phone": "+91-8793262132",
+    "linkedin": "https://www.linkedin.com/in/sakars"
+  },
+  "roles_target": [
+    "Senior Data Analyst",
+    "Analytics Manager",
+    "Lead Data Analyst",
+    "Product Analytics Lead",
+    "Data Science Manager",
+    "AI/ML Analytics Lead",
+    "BI & Analytics Manager"
+  ],
+  "title_patterns": [
+    "(?i)(senior|sr\\.?|lead|principal).*(data|analytics)",
+    "(?i)product analytics (lead|manager|head)",
+    "(?i)(ai|ml).*analyst",
+    "(?i)analytics? manager",
+    "(?i)data science manager",
+    "(?i)(growth|product).*analyst"
+  ],
+  "locations": [
+    "India",
+    "Remote",
+    "US (sponsorship)",
+    "EU/UK (sponsorship)",
+    "APAC (sponsorship)"
+  ],
+  "salary_india_lpa_min": 45,
+  "salary_india_lpa_target": 50,
+  "salary_international": "benchmark per country at runtime",
+  "visa": {
+    "needs_sponsorship_outside_india": true,
+    "india": "authorized"
+  },
+  "domains": [
+    "Tech/Product",
+    "FinTech/BFSI",
+    "E-commerce/Retail",
+    "SaaS/Cloud",
+    "Consulting/IT Services"
+  ],
+  "must_have": [
+    "SQL",
+    "Python",
+    "Tableau",
+    "Power BI"
+  ],
+  "nice_to_have": [
+    "PySpark",
+    "dbt",
+    "Airflow",
+    "BigQuery",
+    "Snowflake",
+    "AWS",
+    "Azure",
+    "GCP",
+    "A/B testing",
+    "scikit-learn",
+    "XGBoost",
+    "NLP",
+    "Team leadership"
+  ],
+  "resume_variants": [
+    {
+      "name": "Universal_2pg",
+      "path": "resume/Sakar_Resume_Universal_2pg.pdf"
+    },
+    {
+      "name": "BFSI_2pg",
+      "path": "resume/Sakar_Resume_BFSI_2pg.pdf"
+    }
+  ],
+  "outreach": {
+    "sender": "srivastavasakar@gmail.com",
+    "daily_cap": 30,
+    "opt_out_line": true
+  }
+}

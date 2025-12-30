@@ -1,0 +1,31 @@
+{
+  "name": "guest",
+  "roles_target": [
+    "Data Analyst",
+    "Senior Data Analyst",
+    "Analytics Manager",
+    "AI Strategist",
+    "Product Analytics"
+  ],
+  "must_have": [
+    "SQL",
+    "Python",
+    "Tableau",
+    "Power BI",
+    "Pyspark",
+    "LLMs",
+    "GenAI"
+  ],
+  "locations": [
+    "India",
+    "Remote",
+    "Delhi NCR"
+  ],
+  "sources": {
+    "adzuna_countries": [
+      "in",
+      "us",
+      "gb"
+    ]
+  }
+}
