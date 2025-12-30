@@ -4,7 +4,7 @@ from typing import Optional, Dict, Any
 
 import requests
 
-from src.storage.db import get_conn, execute, is_postgres  # reuse existing DB helper
+from .db import get_conn, execute, is_postgres  # reuse existing DB helper
 
 SQLITE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS gmail_connections (

@@ -2,7 +2,7 @@ from __future__ import annotations
 import re
 from typing import Dict, Set
 
-from src.storage.db import get_conn
+from storage.db import get_conn
 
 def _read_seeds() -> list[dict]:
     con = get_conn()
