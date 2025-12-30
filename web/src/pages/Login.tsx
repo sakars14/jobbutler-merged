@@ -8,7 +8,6 @@ import { useNavigate } from "react-router-dom";
 import {
   onAuthStateChanged,
   signInWithPhoneNumber,
-  RecaptchaVerifier,
 } from "firebase/auth";
 import { auth, getInvisibleVerifier } from "../firebase";
 

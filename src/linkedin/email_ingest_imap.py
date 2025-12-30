@@ -5,8 +5,8 @@ from email.header import decode_header, make_header
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 
-from harvest.sources import to_rows, dedupe
-from storage.db import upsert_jobs
+from src.harvest.sources import to_rows, dedupe
+from src.storage.db import upsert_jobs
 
 # ---- helpers ---------------------------------------------------------------
 

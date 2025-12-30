@@ -6,16 +6,16 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # --- storage / harvest / alerts / prefill imports (these should already exist in your repo)
-from storage.db import init_db as db_init, upsert_jobs, fetch_all_jobs, get_conn, execute, is_postgres, get_db_label
-from storage import gmail_connections
-from harvest.sources import dedupe, to_rows
-from harvest.remoteok import harvest_remoteok
-from harvest.adzuna import harvest_adzuna              # uses profile + ADZUNA_* from .env
-from harvest.greenhouse import harvest_greenhouse      # takes list of board tokens
-from harvest.lever import harvest_lever                # takes list of company handles
-from ranking.scoring import score_job                  # << use score_job; rank_jobs defined below
-from alerts.email_alert import send_alert
-from prefill.prefill import build_prefill_map
+from src.storage.db import init_db as db_init, upsert_jobs, fetch_all_jobs, get_conn, execute, is_postgres, get_db_label
+from src.storage import gmail_connections
+from src.harvest.sources import dedupe, to_rows
+from src.harvest.remoteok import harvest_remoteok
+from src.harvest.adzuna import harvest_adzuna              # uses profile + ADZUNA_* from .env
+from src.harvest.greenhouse import harvest_greenhouse      # takes list of board tokens
+from src.harvest.lever import harvest_lever                # takes list of company handles
+from src.ranking.scoring import score_job                  # << use score_job; rank_jobs defined below
+from src.alerts.email_alert import send_alert
+from src.prefill.prefill import build_prefill_map
 
 ROOT = Path(__file__).resolve().parents[1]  # repo root
 DEFAULT_SQLITE_PATH = ROOT / "job_butler.sqlite3"

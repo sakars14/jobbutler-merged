@@ -18,7 +18,7 @@ from src.storage.gmail_connections import (
 
 from src.ranking.scoring import rank_jobs
 from src.gmail.job_alerts import ingest_gmail_job_alerts
-from src.storage.db import get_conn, execute as db_execute
+from src.storage.db import get_conn, execute as db_execute, is_postgres
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -124,7 +124,24 @@ def jobs(
     use_scoring: bool = True,
 ):
     # 1) Base: fetch jobs by recency (same as before)
-    rows = q("SELECT * FROM jobs ORDER BY COALESCE(posted_at, created_at) DESC")
+    if is_postgres():
+        # posted_at is TEXT in Postgres schema; created_at is TIMESTAMP.
+        # Only cast posted_at when it looks like an ISO/date string, otherwise fall back to created_at.
+        rows = q(
+            """
+            SELECT *
+              FROM jobs
+             ORDER BY
+               CASE
+                 WHEN posted_at IS NULL OR posted_at = '' THEN created_at
+                 WHEN posted_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN posted_at::timestamptz
+                 ELSE created_at
+               END DESC,
+               created_at DESC
+            """
+        )
+    else:
+        rows = q("SELECT * FROM jobs ORDER BY COALESCE(posted_at, created_at) DESC")
 
     # 2) Optional filters: source + text search (same as before)
     if source:

@@ -3,11 +3,10 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   onAuthStateChanged,
-  signInWithPhoneNumber,
 } from "firebase/auth";
-import type { ConfirmationResult, User } from "firebase/auth";
+import type { User } from "firebase/auth";
 import { doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
-import { auth, db, getInvisibleVerifier } from "../firebase";
+import { auth, db } from "../firebase";
 import { api } from "../lib/api";
 import TagInput from "../components/TagInput";
 
@@ -213,10 +212,6 @@ export default function Signup() {
     } finally {
       setSaving(false);
     }
-  };
-
-  const handleGoToDashboard = () => {
-    nav("/dashboard");
   };
 
   const handleBack = () => {
