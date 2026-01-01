@@ -7,25 +7,49 @@ import Dashboard from "./pages/Dashboard";
 import Support from "./pages/Support";
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
+import Subscribe from "./pages/Subscribe";
+import { BillingProvider } from "./billing/BillingProvider";
+import RequireSubscription from "./routes/RequireSubscription";
 
 function App() {
   return (
-    <BrowserRouter>
-      <Routes>
-        {/* Landing page – full custom layout */}
-        <Route path="/" element={<Home />} />
+    <BillingProvider>
+      <BrowserRouter>
+        <Routes>
+          {/* Landing page – full custom layout */}
+          <Route path="/" element={<Home />} />
 
-        <Route path="/dashboard" element={<Dashboard />} />
+          <Route
+            path="/dashboard"
+            element={
+              <RequireSubscription>
+                <Dashboard />
+              </RequireSubscription>
+            }
+          />
 
-        {/*<Route path="/summary" element={<Summary />} />*/}
-        <Route
-          path="/support"
-          element={<Support />}
-        />
-        <Route path="/login" element={<Login />} />
-        <Route path="/signup" element={<Signup />} />
-      </Routes>
-    </BrowserRouter>
+          {/*<Route path="/summary" element={<Summary />} />*/}
+          <Route
+            path="/support"
+            element={
+              <RequireSubscription>
+                <Support />
+              </RequireSubscription>
+            }
+          />
+          <Route path="/login" element={<Login />} />
+          <Route
+            path="/signup"
+            element={
+              <RequireSubscription>
+                <Signup />
+              </RequireSubscription>
+            }
+          />
+          <Route path="/subscribe" element={<Subscribe />} />
+        </Routes>
+      </BrowserRouter>
+    </BillingProvider>
   );
 }
 

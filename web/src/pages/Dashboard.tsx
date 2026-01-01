@@ -4,6 +4,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { onAuthStateChanged, signOut } from "firebase/auth";
 import { doc, getDoc } from "firebase/firestore";
 import { auth, db } from "../firebase";
+import { useBilling } from "../billing/BillingProvider";
 
 type PersonaShape = {
   roles_target?: string[];
@@ -37,6 +38,7 @@ const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
 export default function Dashboard() {
   const nav = useNavigate();
   const location = useLocation();
+  const { loading: billingLoading, isAdmin, isSubscribed, isTrialActive } = useBilling();
 
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -374,10 +376,32 @@ export default function Dashboard() {
     });
   }, [jobs, q, locationFilter, recencyDays, roleMatchOnly, skillsMatchOnly, persona]);
 
+  const showTrialBanner =
+    !billingLoading && isTrialActive && !isSubscribed && !isAdmin;
 
   return (
     <div className="dash-page">
       <div className="dash-card">
+        {showTrialBanner && (
+          <button
+            type="button"
+            className="dash-banner"
+            onClick={() => nav("/subscribe")}
+            style={{
+              width: "100%",
+              textAlign: "left",
+              marginBottom: 16,
+              padding: 12,
+              borderRadius: 12,
+              border: "1px solid #f2d18c",
+              background: "#fff4dc",
+              color: "#2f2f2f",
+              cursor: "pointer",
+            }}
+          >
+            2-day trial has started. Click here to subscribe to stay connected.
+          </button>
+        )}
         {/* Card Top Bar */}
         <header className="dash-header">
           <div className="dash-header-right" style={{ marginLeft: "auto" }}>
