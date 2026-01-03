@@ -5,6 +5,7 @@ import { onAuthStateChanged, signOut } from "firebase/auth";
 import { doc, getDoc } from "firebase/firestore";
 import { auth, db } from "../firebase";
 import { useBilling } from "../billing/BillingProvider";
+import { formatHhMmFromMs } from "../billing/billingStore";
 
 type PersonaShape = {
   roles_target?: string[];
@@ -38,7 +39,14 @@ const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
 export default function Dashboard() {
   const nav = useNavigate();
   const location = useLocation();
-  const { loading: billingLoading, isAdmin, isSubscribed, isTrialActive } = useBilling();
+  const {
+    loading: billingLoading,
+    isAdmin,
+    isPaid,
+    isTrialActive,
+    trialRemainingMs,
+  } = useBilling();
+  const [trialTick, setTrialTick] = useState(0);
 
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -217,6 +225,12 @@ export default function Dashboard() {
     })();
   }, [location.pathname, location.search, nav, uid, loadJobs, loadGmailStatus]);
 
+  useEffect(() => {
+    if (!isTrialActive) return;
+    const id = setInterval(() => setTrialTick((x) => x + 1), 30_000);
+    return () => clearInterval(id);
+  }, [isTrialActive]);
+
   const displayName = useMemo(() => {
     return profile?.name || profile?.fullName || "User";
   }, [profile]);
@@ -377,7 +391,11 @@ export default function Dashboard() {
   }, [jobs, q, locationFilter, recencyDays, roleMatchOnly, skillsMatchOnly, persona]);
 
   const showTrialBanner =
-    !billingLoading && isTrialActive && !isSubscribed && !isAdmin;
+    !billingLoading && isTrialActive && !isPaid && !isAdmin;
+  const trialCountdown = useMemo(
+    () => formatHhMmFromMs(trialRemainingMs),
+    [trialRemainingMs, trialTick]
+  );
 
   return (
     <div className="dash-page">
@@ -399,7 +417,7 @@ export default function Dashboard() {
               cursor: "pointer",
             }}
           >
-            2-day trial has started. Click here to subscribe to stay connected.
+            Trial ends in {trialCountdown} (HH:MM). Subscribe to keep access →
           </button>
         )}
         {/* Card Top Bar */}

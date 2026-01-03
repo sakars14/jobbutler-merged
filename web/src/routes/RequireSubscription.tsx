@@ -1,12 +1,13 @@
+import type { ReactNode } from "react";
 import { Navigate } from "react-router-dom";
 import { useBilling } from "../billing/BillingProvider";
 
 export default function RequireSubscription({
   children,
 }: {
-  children: JSX.Element;
+  children: ReactNode;
 }) {
-  const { loading, isBlocked } = useBilling();
+  const { loading, isAdmin, isPaid, isTrialActive } = useBilling();
 
   if (loading) {
     return (
@@ -16,9 +17,7 @@ export default function RequireSubscription({
     );
   }
 
-  if (isBlocked) {
-    return <Navigate to="/subscribe" replace />;
-  }
+  if (isAdmin || isPaid || isTrialActive) return children;
 
-  return children;
+  return <Navigate to="/subscribe" replace />;
 }

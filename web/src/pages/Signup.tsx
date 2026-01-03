@@ -1,6 +1,6 @@
 // src/pages/Signup.tsx
-import { useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import {
   onAuthStateChanged,
 } from "firebase/auth";
@@ -33,6 +33,7 @@ const LOC_SUGG = ["India", "Remote", "Bangalore", "Pune", "Mumbai", "Delhi NCR"]
 
 export default function Signup() {
   const nav = useNavigate();
+  const location = useLocation();
   const prefillDone = useRef(false);
 
   //const [step, setStep] = useState<Step>("phone");
@@ -62,6 +63,10 @@ export default function Signup() {
   const [saveErr, setSaveErr] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [savedProfile, setSavedProfile] = useState<any | null>(null);
+  const nextPath = useMemo(() => {
+    const params = new URLSearchParams(location.search);
+    return params.get("next") || "/dashboard";
+  }, [location.search]);
 
   const markEdited = () => {
     prefillDone.current = true;
@@ -205,7 +210,7 @@ export default function Signup() {
       await api.post("/persona", { uid, persona: personaPayload });
 
       setSavedProfile(profile);
-      nav("/dashboard", { replace: true });
+      nav(nextPath, { replace: true });
     } catch (e: any) {
       console.error("Save profile failed", e);
       setSaveErr(e.message || e.toString());
