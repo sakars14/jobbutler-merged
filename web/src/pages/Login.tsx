@@ -4,7 +4,7 @@ import { doc, getDoc } from "firebase/firestore";
 import type { User } from "firebase/auth";
 
 import { useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import {
   onAuthStateChanged,
   signInWithPhoneNumber,
@@ -13,6 +13,7 @@ import { auth, getInvisibleVerifier } from "../firebase";
 
 export default function Login() {
   const nav = useNavigate();
+  const location = useLocation();
   const [phone, setPhone] = useState("+91"); // auto-prefix India
   const [otpSent, setOtpSent] = useState(false);
   const [otp, setOtp] = useState("");
@@ -21,6 +22,12 @@ export default function Login() {
     useRef<import("firebase/auth").ConfirmationResult | null>(null);
 
     const routeAfterLogin = async (u: User) => {
+      const params = new URLSearchParams(location.search);
+      const next = params.get("next");
+      if (next && next.startsWith("/")) {
+        nav(next, { replace: true });
+        return;
+      }
       try {
         const ref = doc(db, "users", u.uid);
         const snap = await getDoc(ref);
@@ -47,7 +54,7 @@ export default function Login() {
         }
       });
       return () => unsub();
-    }, [nav]);
+    }, [location.search, nav]);
     
 
   const normalize = (raw: string) => {

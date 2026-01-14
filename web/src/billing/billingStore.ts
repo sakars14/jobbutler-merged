@@ -33,16 +33,6 @@ const hoursToMs = (hours: number) => hours * 60 * 60 * 1000;
 const isTimestamp = (val: any): val is Timestamp =>
   val && typeof val.toDate === "function";
 
-const inferStatus = (data: BillingDoc, nowMs: number): BillingStatus => {
-  if (data.status) return data.status;
-  if (data.isSubscribed) return "active";
-  if (data.trialEndsAt && isTimestamp(data.trialEndsAt)) {
-    const end = data.trialEndsAt.toDate().getTime();
-    return end > nowMs ? "trial" : "blocked";
-  }
-  return "none";
-};
-
 export const getTrialRemainingMs = (billing?: BillingDoc | null): number => {
   if (!billing?.trialEndsAt) return 0;
   const endMs = isTimestamp(billing.trialEndsAt)
@@ -64,6 +54,43 @@ export const formatHhMmFromMs = (ms: number): string => {
 
 export const formatHHMM = formatHhMmFromMs;
 
+export function getSubscriptionRemainingMs(
+  billing: BillingDoc | null | undefined,
+  nowMs = Date.now()
+): number {
+  if (!billing?.subscriptionEndsAt) return 0;
+  const endMs = isTimestamp(billing.subscriptionEndsAt)
+    ? billing.subscriptionEndsAt.toDate().getTime()
+    : Number(billing.subscriptionEndsAt);
+  if (!Number.isFinite(endMs)) return 0;
+  return Math.max(0, endMs - nowMs);
+}
+
+export function formatDdHhMmSsFromMs(ms: number): string {
+  const totalSec = Math.max(0, Math.floor(ms / 1000));
+  const days = Math.floor(totalSec / 86400);
+  const rem = totalSec % 86400;
+  const hh = Math.floor(rem / 3600);
+  const mm = Math.floor((rem % 3600) / 60);
+  const ss = rem % 60;
+  const pad2 = (n: number) => String(n).padStart(2, "0");
+  return `${days}d ${pad2(hh)}:${pad2(mm)}:${pad2(ss)}`;
+}
+
+const inferStatus = (data: BillingDoc, nowMs: number): BillingStatus => {
+  if (data.subscriptionEndsAt) {
+    const remaining = getSubscriptionRemainingMs(data, nowMs);
+    return remaining > 0 ? "active" : "blocked";
+  }
+  if (data.status) return data.status;
+  if (data.isSubscribed) return "active";
+  if (data.trialEndsAt && isTimestamp(data.trialEndsAt)) {
+    const end = data.trialEndsAt.toDate().getTime();
+    return end > nowMs ? "trial" : "blocked";
+  }
+  return "none";
+};
+
 export const ensureBillingDoc = async (uid: string): Promise<void> => {
   const ref = doc(db, "billing", uid);
   const snap = await getDoc(ref);
@@ -83,7 +110,7 @@ export const ensureBillingDoc = async (uid: string): Promise<void> => {
   const status = inferStatus(data, nowMs);
   const updates: Partial<BillingDoc> = {};
 
-  if (!data.status) {
+  if (data.status !== status) {
     updates.status = status;
   }
 
@@ -184,15 +211,44 @@ export const startTrialOnce = async (
 
 export const markActive = async (
   uid: string,
-  source: BillingDoc["source"] = "manual"
+  source: BillingDoc["source"] = "manual",
+  opts?: { period?: "monthly" | "quarterly"; days?: number }
 ): Promise<void> => {
-  const ref = doc(db, "billing", uid);
-  const payload: BillingDoc = {
-    status: "active",
-    plan: "pro",
-    source,
-    activeSince: serverTimestamp(),
-    updatedAt: serverTimestamp(),
+  const PERIOD_DAYS: Record<"monthly" | "quarterly", number> = {
+    monthly: 30,
+    quarterly: 90,
   };
-  await setDoc(ref, payload, { merge: true });
+  const period = opts?.period || "monthly";
+  const days = opts?.days ?? PERIOD_DAYS[period];
+
+  const ref = doc(db, "billing", uid);
+  const snap = await getDoc(ref);
+  const existing = snap.exists() ? (snap.data() as BillingDoc) : null;
+
+  let base = new Date();
+  const existingEnd = isTimestamp(existing?.subscriptionEndsAt)
+    ? existing.subscriptionEndsAt.toDate()
+    : null;
+  if (existingEnd && existingEnd.getTime() > base.getTime()) {
+    base = existingEnd;
+  }
+
+  const endsAt = Timestamp.fromDate(new Date(base.getTime() + days * 86400000));
+
+  await setDoc(
+    ref,
+    {
+      status: "active",
+      plan: "pro",
+      period,
+      activeSince: serverTimestamp(),
+      subscriptionEndsAt: endsAt,
+      trialEndsAt: null,
+      trialStartedAt: null,
+      trialUsed: true,
+      source,
+      updatedAt: serverTimestamp(),
+    },
+    { merge: true }
+  );
 };

@@ -63,6 +63,10 @@ export default function Signup() {
   const [saveErr, setSaveErr] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [savedProfile, setSavedProfile] = useState<any | null>(null);
+  const status = useMemo(() => {
+    const params = new URLSearchParams(location.search);
+    return params.get("status");
+  }, [location.search]);
   const nextPath = useMemo(() => {
     const params = new URLSearchParams(location.search);
     return params.get("next") || "/dashboard";
@@ -85,6 +89,7 @@ export default function Signup() {
     });
     return () => unsub();
   }, [nav]);
+
 
   useEffect(() => {
     if (!currentUser || prefillDone.current) return;
@@ -278,6 +283,23 @@ export default function Signup() {
                 
             </header>
         </div>
+
+        {(status === "trial" || status === "paid") && (
+          <div
+            className="badge"
+            style={{
+              background: "rgba(16,185,129,0.15)",
+              color: "#065f46",
+              border: "1px solid rgba(16,185,129,0.35)",
+              margin: "12px 0 16px",
+              display: "inline-flex",
+            }}
+          >
+            {status === "trial"
+              ? "Trial started ✅"
+              : "Payment successful ✅ Account active."}
+          </div>
+        )}
 
         <h1>Tell us about you</h1>
 <p className="muted">

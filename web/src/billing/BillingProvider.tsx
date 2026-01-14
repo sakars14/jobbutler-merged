@@ -6,6 +6,7 @@ import { auth, db } from "../firebase";
 import {
   ensureBillingDoc,
   formatHhMmFromMs,
+  getSubscriptionRemainingMs,
   getTrialRemainingMs,
   markActive,
   startTrialOnce,
@@ -19,14 +20,20 @@ type BillingState = {
   billingDoc: BillingDoc | null;
   billing: BillingDoc | null;
   isPaid: boolean;
+  isPaidActive: boolean;
   needsChoice: boolean;
   isTrialActive: boolean;
   isTrialUsed: boolean;
   isBlocked: boolean;
   trialRemainingMs: number;
   trialCountdownHHMM: string;
+  subscriptionRemainingMs: number;
   startTrialOnce: (uid: string) => Promise<"started" | "already_used">;
-  markActiveAction: (uid: string, source?: BillingDoc["source"]) => Promise<void>;
+  markActiveAction: (
+    uid: string,
+    source?: BillingDoc["source"],
+    opts?: { period?: "monthly" | "quarterly"; days?: number }
+  ) => Promise<void>;
 };
 
 const BillingContext = createContext<BillingState | undefined>(undefined);
@@ -44,6 +51,10 @@ const normalizeBilling = (
   if (!data) return null;
   const status = (data.status ||
     (data.isSubscribed ? "active" : undefined)) as BillingStatus | undefined;
+  if (data.subscriptionEndsAt && typeof data.subscriptionEndsAt.toDate === "function") {
+    const endMs = data.subscriptionEndsAt.toDate().getTime();
+    return { ...data, status: endMs > nowMs ? "active" : "blocked" };
+  }
   if (status) return { ...data, status };
   if (data.trialEndsAt && typeof data.trialEndsAt.toDate === "function") {
     const endMs = data.trialEndsAt.toDate().getTime();
@@ -56,14 +67,14 @@ export function BillingProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [billing, setBilling] = useState<BillingDoc | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
-  const [, setNow] = useState(Date.now());
+  const [nowMs, setNowMs] = useState(Date.now());
 
   const adminPhones = useMemo(
     () => new Set(parsePhones(import.meta.env.VITE_ADMIN_PHONES)),
     []
   );
   useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 30 * 1000);
+    const timer = setInterval(() => setNowMs(Date.now()), 30 * 1000);
     return () => clearInterval(timer);
   }, []);
 
@@ -127,8 +138,12 @@ export function BillingProvider({ children }: { children: ReactNode }) {
   }, [adminPhones]);
 
   const trialRemainingMs = getTrialRemainingMs(billing);
+  const subscriptionRemainingMs = getSubscriptionRemainingMs(billing, nowMs);
   const isTrialActive = billing?.status === "trial" && trialRemainingMs > 0;
   const isPaid = billing?.status === "active";
+  const isPaidActive = billing?.subscriptionEndsAt
+    ? subscriptionRemainingMs > 0
+    : isPaid;
   const isTrialUsed =
     billing?.trialUsed === true ||
     !!billing?.trialStartedAt ||
@@ -136,7 +151,7 @@ export function BillingProvider({ children }: { children: ReactNode }) {
   const needsChoice = !isAdmin && billing?.status === "none";
   const isBlocked =
     !isAdmin &&
-    !isPaid &&
+    !isPaidActive &&
     isTrialUsed &&
     !isTrialActive;
   const trialCountdownHHMM = formatHhMmFromMs(trialRemainingMs);
@@ -147,9 +162,10 @@ export function BillingProvider({ children }: { children: ReactNode }) {
 
   const markActiveAction = async (
     targetUid: string,
-    source: BillingDoc["source"] = "manual"
+    source: BillingDoc["source"] = "manual",
+    opts?: { period?: "monthly" | "quarterly"; days?: number }
   ) => {
-    await markActive(targetUid, source);
+    await markActive(targetUid, source, opts);
   };
 
   const value: BillingState = {
@@ -158,12 +174,14 @@ export function BillingProvider({ children }: { children: ReactNode }) {
     billingDoc: billing,
     billing,
     isPaid,
+    isPaidActive,
     needsChoice,
     isTrialActive,
     isTrialUsed,
     isBlocked,
     trialRemainingMs,
     trialCountdownHHMM,
+    subscriptionRemainingMs,
     startTrialOnce: startTrialOnceAction,
     markActiveAction,
   };

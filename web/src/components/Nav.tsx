@@ -1,7 +1,18 @@
 import { Link, NavLink, useLocation } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { onAuthStateChanged } from "firebase/auth";
+import { auth } from "../firebase";
 import "./styles.css"; // ← Single global import here
 export default function Nav() {
   const { pathname } = useLocation();
+  const [authed, setAuthed] = useState(Boolean(auth.currentUser));
+
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (u) => {
+      setAuthed(Boolean(u));
+    });
+    return () => unsub();
+  }, []);
 
   return (
     <header className="nav">
@@ -20,7 +31,7 @@ export default function Nav() {
             How it works
           </NavLink>
           <NavLink
-            to="/support"
+            to={authed ? "/support" : "/login?next=/support"}
             className={({ isActive }) => (isActive ? "link active" : "link")}
           >
             Support

@@ -7,7 +7,7 @@ export default function RequireSubscription({
 }: {
   children: ReactNode;
 }) {
-  const { loading, isAdmin, isPaid, isTrialActive } = useBilling();
+  const { loading, isAdmin, isPaidActive, isTrialActive } = useBilling();
 
   if (loading) {
     return (
@@ -17,7 +17,7 @@ export default function RequireSubscription({
     );
   }
 
-  if (isAdmin || isPaid || isTrialActive) return children;
+  if (isAdmin || isPaidActive || isTrialActive) return children;
 
   return <Navigate to="/subscribe" replace />;
 }

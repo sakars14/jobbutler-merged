@@ -50,6 +50,14 @@ export default function Home() {
     }
   };
 
+  const handleSupportClick = () => {
+    if (currentUser) {
+      navigate("/support");
+    } else {
+      navigate("/login?next=/support");
+    }
+  };
+
   const handleSignOut = async () => {
     try {
       await signOut(auth);
@@ -76,7 +84,7 @@ export default function Home() {
             </button>
             <button
               type="button"
-              onClick={() => navigate("/support")}
+              onClick={handleSupportClick}
             >
               Support
             </button>
