@@ -86,7 +86,7 @@ export default function InstamojoReturn() {
           active = false;
           return;
         }
-        if (data && data.pending) {
+        if (res.status === 202 || data?.pending || data?.error === "pending_webhook") {
           return;
         }
         if (data?.error) {

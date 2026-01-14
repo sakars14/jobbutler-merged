@@ -1,6 +1,6 @@
 from __future__ import annotations
 from fastapi import FastAPI, Body, Query, HTTPException, Depends, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from datetime import datetime, timezone, timedelta
@@ -264,6 +264,30 @@ def _infer_instamojo_plan(payload: dict, plan_param: str | None) -> str | None:
     return None
 
 
+def _normalize_status(raw: str | None) -> str:
+    return (raw or "").strip().lower()
+
+
+def _is_success_status(raw: str | None) -> bool:
+    return _normalize_status(raw) in {
+        "success",
+        "successful",
+        "credit",
+        "completed",
+        "paid",
+    }
+
+
+def _extract_instamojo_status(payload: dict) -> tuple[str, str]:
+    raw = (
+        payload.get("payment_status")
+        or payload.get("status")
+        or payload.get("paymentStatus")
+        or ""
+    )
+    return raw, _normalize_status(raw)
+
+
 def _activate_billing(db, uid: str, plan: str, payment_id: str | None, payload: dict) -> None:
     days = 90 if plan == "3m" else 30
     period = "quarterly" if plan == "3m" else "monthly"
@@ -324,8 +348,7 @@ async def instamojo_webhook(request: Request):
     mac_calc = compute_instamojo_mac(payload, salt) if salt else ""
     mac_ok = bool(mac_calc) and bool(mac_provided) and mac_calc.lower() == mac_provided.lower()
 
-    status_raw = payload.get("payment_status") or payload.get("status") or ""
-    status_norm = status_raw.strip().lower()
+    status_raw, status_norm = _extract_instamojo_status(payload)
 
     try:
         db = get_firestore_client()
@@ -356,7 +379,7 @@ async def instamojo_webhook(request: Request):
         print("[instamojo] invalid MAC")
         return {"ok": True, "mac_ok": False}
 
-    if status_norm not in {"credit", "success"}:
+    if not _is_success_status(status_norm):
         return {"ok": True}
 
     buyer_phone = _normalize_phone(payload.get("buyer_phone"))
@@ -400,18 +423,32 @@ def instamojo_confirm(body: InstamojoConfirmIn):
 
     doc = db.collection("instamojoPayments").document(payment_id).get()
     if not doc.exists:
-        return {"ok": False, "pending": True}
+        return JSONResponse(
+            status_code=202,
+            content={"ok": False, "pending": True, "error": "pending_webhook"},
+        )
 
     data = doc.to_dict() or {}
-    if not data.get("macOk", False):
-        return {"ok": False, "pending": False, "error": "mac_invalid"}
-
-    status_raw = data.get("paymentStatus") or ""
-    status_norm = str(status_raw).strip().lower()
-    if status_norm not in {"credit", "success"}:
-        return {"ok": False, "pending": False, "error": "payment_not_success"}
-
     payload = data.get("raw") or {}
+    mac_ok = data.get("macOk", False) is True
+    if not mac_ok:
+        return {"ok": False, "pending": False, "error": "invalid_mac"}
+
+    status_raw = (
+        data.get("paymentStatus")
+        or data.get("status")
+        or payload.get("payment_status")
+        or payload.get("status")
+        or payload.get("paymentStatus")
+        or ""
+    )
+    status_norm = _normalize_status(status_raw)
+    if not _is_success_status(status_norm):
+        print(
+            f"[instamojo] activate payment_id={payment_id} status={status_raw} "
+            f"norm={status_norm} macOk={mac_ok}"
+        )
+        return {"ok": False, "pending": False, "error": "payment_not_success"}
     plan = _infer_instamojo_plan(payload, body.plan)
     if not plan:
         return {"ok": False, "pending": False, "error": "plan_unknown"}
