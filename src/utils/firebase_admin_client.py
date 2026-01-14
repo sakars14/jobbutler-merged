@@ -42,3 +42,12 @@ def get_uid_by_phone(phone: str) -> str | None:
     except auth.UserNotFoundError:
         return None
     return user.uid
+
+
+def get_uid_by_email(email: str) -> str | None:
+    app = _init_app()
+    try:
+        user = auth.get_user_by_email(email, app=app)
+    except auth.UserNotFoundError:
+        return None
+    return user.uid
