@@ -9,11 +9,14 @@ import {
   getDoc,
   onSnapshot,
   query,
+  limit,
+  orderBy,
   serverTimestamp,
   where,
 } from "firebase/firestore";
 import { auth, db } from "../firebase";
 import { api } from "../lib/api";
+import { isAdminUser } from "../utils/isAdmin";
 
 type SupportRequestItem = {
   id: string;
@@ -24,6 +27,7 @@ type SupportRequestItem = {
 export default function Support() {
   const nav = useNavigate();
   const prefillDone = useRef(false);
+  const [isAdmin, setIsAdmin] = useState(false);
 
   const [uid, setUid] = useState<string | null>(null);
   const [name, setName] = useState("");
@@ -59,23 +63,40 @@ export default function Support() {
     const unsub = onAuthStateChanged(auth, (u) => {
       if (!u) {
         setUid(null);
-        nav("/login");
+        setIsAdmin(false);
+        nav("/login?next=/support");
         return;
       }
       setUid(u.uid);
+      setIsAdmin(isAdminUser(u));
     });
     return () => unsub();
   }, [nav]);
 
   useEffect(() => {
-    if (!uid) return;
+    if (!uid) {
+      setRequests([]);
+      setRequestsLoading(false);
+      setRequestsErr("Please login to view support requests.");
+      return;
+    }
     setRequestsLoading(true);
     setRequestsErr(null);
 
-    const q = query(
-      collection(db, "supportRequests"),
-      where("uid", "==", uid)
-    );
+    // Firestore rules should allow: read for admins, read for owner (uid match).
+    // Firestore rules should allow: create for authed users, read for admin or owner.
+    const q = isAdmin
+      ? query(
+          collection(db, "supportRequests"),
+          orderBy("createdAt", "desc"),
+          limit(20)
+        )
+      : query(
+          collection(db, "supportRequests"),
+          where("uid", "==", uid),
+          orderBy("createdAt", "desc"),
+          limit(20)
+        );
 
     const unsub = onSnapshot(
       q,
@@ -102,15 +123,19 @@ export default function Support() {
         setRequestsLoading(false);
       },
       (error) => {
-        console.error("Failed to load support requests", error);
-        setRequestsErr("Could not load requests.");
+        const code = (error as { code?: string })?.code;
+        if (code === "permission-denied") {
+          setRequestsErr("Support history not available for this account.");
+        } else {
+          setRequestsErr("Could not load requests.");
+        }
         setRequests([]);
         setRequestsLoading(false);
       }
     );
 
     return () => unsub();
-  }, [uid]);
+  }, [uid, isAdmin]);
 
   useEffect(() => {
     if (!uid || prefillDone.current) return;

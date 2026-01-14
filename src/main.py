@@ -6,7 +6,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # --- storage / harvest / alerts / prefill imports (these should already exist in your repo)
-from src.storage.db import init_db as db_init, upsert_jobs, fetch_all_jobs, get_conn, execute, is_postgres, get_db_label
+from src.storage.db import init_db as db_init, upsert_jobs, fetch_all_jobs, get_conn, execute, is_postgres, get_db_label, maintain_jobs, dedupe_jobs
 from src.storage import gmail_connections
 from src.harvest.sources import dedupe, to_rows
 from src.harvest.remoteok import harvest_remoteok
@@ -138,13 +138,13 @@ def cmd_harvest_live(args):
     print(f"[ok] Inserted {len(jobs)} live jobs.")
 
 def cmd_ingest_naukri_imap(args):
-    from naukri.email_ingest_imap import ingest as ingest_naukri
+    from src.naukri.email_ingest_imap import ingest as ingest_naukri
     n = ingest_naukri(days=args.since, max_msgs=args.max)
     print(f"[ok] Ingested {n} Naukri jobs from email alerts.")
 
 def cmd_ingest_linkedin_imap(args):
     try:
-        from linkedin.email_ingest_imap import ingest as ingest_li
+        from src.linkedin.email_ingest_imap import ingest as ingest_li
     except Exception:
         print("[warn] LinkedIn IMAP add-on not found. Skip.", file=sys.stderr)
         return
@@ -173,6 +173,14 @@ def cmd_alert(args):
 def cmd_prefill(args):
     mapping = build_prefill_map(ROOT, load_profile(), args.ats)
     print(json.dumps(mapping, indent=2))
+
+def cmd_maintain_jobs(args):
+    marked_inactive, archived = maintain_jobs()
+    print(f"[ok] jobs maintained: marked_inactive={marked_inactive} archived={archived}")
+
+def cmd_dedupe_jobs(args):
+    deleted = dedupe_jobs()
+    print(f"[ok] jobs deduped: removed={deleted}")
 
 def cmd_list(args):
     jobs = fetch_all_jobs()
@@ -439,6 +447,13 @@ def main():
     p_mig = sub.add_parser("migrate-sqlite-to-postgres")
     p_mig.add_argument("--sqlite_path", default=str(DEFAULT_SQLITE_PATH))
     p_mig.set_defaults(func=cmd_migrate_sqlite_to_postgres)
+
+    # maintain jobs
+    p_maintain = sub.add_parser("maintain-jobs")
+    p_maintain.set_defaults(func=cmd_maintain_jobs)
+
+    p_dedupe = sub.add_parser("dedupe-jobs")
+    p_dedupe.set_defaults(func=cmd_dedupe_jobs)
 
     args = ap.parse_args()
     if hasattr(args, "func"):

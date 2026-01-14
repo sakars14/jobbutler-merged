@@ -1,13 +1,17 @@
 from __future__ import annotations
-from fastapi import FastAPI, Body, Query, HTTPException
+from fastapi import FastAPI, Body, Query, HTTPException, Depends, Request
 from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import json, os, subprocess, time, secrets, smtplib
+from datetime import datetime, timezone, timedelta
+from typing import Generator
+import contextlib
+import json, os, subprocess, time, secrets, smtplib, sys, re, traceback
 from email.message import EmailMessage
-from urllib.parse import urlencode
+from urllib.parse import urlencode, parse_qsl
 
 import requests  # already in requirements.txt
+from firebase_admin import firestore as admin_firestore
 
 #from src.storage.gmail_connections import upsert_gmail_connection
 from src.storage.gmail_connections import (
@@ -18,20 +22,66 @@ from src.storage.gmail_connections import (
 
 from src.ranking.scoring import rank_jobs
 from src.gmail.job_alerts import ingest_gmail_job_alerts
-from src.storage.db import get_conn, execute as db_execute, is_postgres
+from src.storage.db import (
+    get_conn,
+    get_pg_pool,
+    close_pg_pool,
+    init_db,
+    execute as db_execute,
+    is_postgres,
+    maintain_jobs,
+    dedupe_jobs,
+    upsert_jobs,
+    ensure_harvest_packs,
+)
+from src.harvest.sources import dedupe, to_rows
+from src.harvest.packs import run_harvest_pack
+from src.utils.firebase_admin_client import get_firestore_client, get_uid_by_phone
+from src.utils.instamojo import verify_instamojo_webhook_mac
 
 from dotenv import load_dotenv
 load_dotenv()
 
 app = FastAPI(title="Job Butler API")
 
+def db_conn() -> Generator:
+    if is_postgres():
+        pool = get_pg_pool()
+        with pool.connection() as conn:
+            yield conn
+    else:
+        conn = get_conn()
+        try:
+            yield conn
+        finally:
+            with contextlib.suppress(Exception):
+                conn.close()
+
+@app.on_event("startup")
+def _startup_init_db() -> None:
+    try:
+        init_db()
+    except Exception as exc:
+        print(f"[warn] init_db failed: {exc}")
+
+@app.on_event("shutdown")
+def _shutdown() -> None:
+    close_pg_pool()
+
 def _get_cors_origins() -> list[str]:
-    raw = os.getenv("CORS_ALLOWED_ORIGINS")
-    if raw:
-        origins = [o.strip() for o in raw.split(",") if o.strip()]
-        if origins:
-            return origins
-    return ["http://localhost:5173", "http://localhost:3000"]
+    base = [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "https://www.jobbutler.in",
+        "https://jobbutler.in",
+    ]
+    raw = os.getenv("CORS_ALLOWED_ORIGINS") or ""
+    extra = [o.strip() for o in raw.split(",") if o.strip()]
+    origins = []
+    for origin in [*base, *extra]:
+        if origin not in origins:
+            origins.append(origin)
+    return origins
 
 def _get_frontend_base_url() -> str:
     return (os.getenv("FRONTEND_BASE_URL") or "http://localhost:5173").rstrip("/")
@@ -55,6 +105,10 @@ app.add_middleware(
 )
 
 def q(sql, params=()):
+    if is_postgres():
+        pool = get_pg_pool()
+        with pool.connection() as conn:
+            return [dict(r) for r in db_execute(conn, sql, params).fetchall()]
     con = get_conn()
     rows = [dict(r) for r in db_execute(con, sql, params).fetchall()]
     con.close()
@@ -71,6 +125,19 @@ class SupportNotifyIn(BaseModel):
     email: str | None = None
     message: str
     createdAtISO: str
+
+class PackUpdateIn(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    is_enabled: bool | None = None
+    config: dict | None = None
+
+class PackCreateIn(BaseModel):
+    name: str
+    description: str | None = None
+    is_enabled: bool = True
+    config: dict | None = None
+    slug: str | None = None
 
 def load_profile_for_uid(uid: str | None) -> dict:
     """Load persona for a given uid, falling back to profile.json if needed."""
@@ -96,9 +163,517 @@ def load_profile_for_uid(uid: str | None) -> dict:
 
     return profile or {}
 
+def _parse_pack_config(raw):
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        try:
+            return json.loads(raw)
+        except Exception:
+            return {}
+    return {}
+
+def _pack_row_to_dict(row) -> dict:
+    data = dict(row)
+    data["config"] = _parse_pack_config(data.get("config"))
+    if "sources" not in data["config"]:
+        sources = []
+        if data["config"].get("remoteok"):
+            sources.append("remoteok")
+        if data["config"].get("adzuna_in"):
+            sources.append("adzuna_in")
+        if data["config"].get("greenhouse"):
+            sources.append("greenhouse")
+        if data["config"].get("lever"):
+            sources.append("lever")
+        data["config"]["sources"] = sources
+    if "is_enabled" in data:
+        data["is_enabled"] = bool(data["is_enabled"])
+    return data
+
+def _slugify(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+    return slug
+
+def _normalize_phone(raw: str | None) -> str | None:
+    if not raw:
+        return None
+    raw = raw.strip()
+    if raw.startswith("+"):
+        return raw
+    digits = re.sub(r"\D", "", raw)
+    if not digits:
+        return None
+    if digits.startswith("0"):
+        digits = digits.lstrip("0")
+    if len(digits) == 10:
+        return f"+91{digits}"
+    if digits.startswith("91") and len(digits) == 12:
+        return f"+91{digits[2:]}"
+    return f"+{digits}"
+
+def _list_packs(conn, enabled_only: bool = False) -> list[dict]:
+    sql = "SELECT * FROM harvest_packs WHERE deleted_at IS NULL"
+    params: tuple = ()
+    if enabled_only:
+        sql += " AND is_enabled = ?"
+        params = (True if is_postgres() else 1,)
+    sql += " ORDER BY created_at ASC"
+    try:
+        rows = db_execute(conn, sql, params).fetchall()
+    except Exception as exc:
+        msg = str(exc).lower()
+        if "harvest_packs" in msg and ("does not exist" in msg or "no such table" in msg):
+            return []
+        raise
+    return [_pack_row_to_dict(r) for r in rows]
+
 @app.get("/health")
 def health():
     return {"ok": True}
+
+@app.post("/api/billing/instamojo/webhook")
+async def instamojo_webhook(request: Request):
+    body = await request.body()
+    payload = dict(parse_qsl(body.decode("utf-8")))
+    salt = os.getenv("INSTAMOJO_SALT")
+    if not salt:
+        print("[instamojo] missing INSTAMOJO_SALT")
+        raise HTTPException(status_code=500, detail="instamojo not configured")
+
+    if not verify_instamojo_webhook_mac(payload, salt):
+        print("[instamojo] invalid MAC")
+        raise HTTPException(status_code=400, detail="invalid signature")
+
+    status = (payload.get("status") or "").strip().lower()
+    if status != "credit":
+        return {"ok": True}
+
+    purpose = (payload.get("purpose") or "").lower()
+    amount_raw = payload.get("amount") or ""
+    try:
+        amount = float(amount_raw)
+    except (TypeError, ValueError):
+        amount = 0.0
+
+    days = 90 if ("3" in purpose or "quarter" in purpose or amount >= 1000) else 30
+    period = "quarterly" if days == 90 else "monthly"
+
+    buyer_phone = _normalize_phone(payload.get("buyer_phone"))
+    if not buyer_phone:
+        print("[instamojo] missing buyer_phone")
+        return {"ok": True}
+
+    try:
+        db = get_firestore_client()
+    except Exception as exc:
+        print(f"[instamojo] firebase admin not configured: {exc}")
+        raise HTTPException(status_code=500, detail="firebase admin not configured")
+
+    uid = get_uid_by_phone(buyer_phone)
+    if not uid:
+        print(f"[instamojo] no user for phone {buyer_phone}")
+        return {"ok": True}
+
+    now = datetime.now(timezone.utc)
+    ends_at = now + timedelta(days=days)
+    payment_meta = {
+        "payment_id": payload.get("payment_id"),
+        "payment_request_id": payload.get("payment_request_id"),
+        "amount": payload.get("amount"),
+        "purpose": payload.get("purpose"),
+        "status": payload.get("status"),
+        "buyer_phone": buyer_phone,
+    }
+
+    doc_ref = db.collection("billing").document(uid)
+    doc_ref.set(
+        {
+            "status": "active",
+            "plan": "pro",
+            "period": period,
+            "subscriptionStartedAt": admin_firestore.SERVER_TIMESTAMP,
+            "subscriptionEndsAt": ends_at,
+            "lastPayment": payment_meta,
+            "updatedAt": admin_firestore.SERVER_TIMESTAMP,
+        },
+        merge=True,
+    )
+
+    return {"ok": True}
+
+@app.get("/admin/metrics")
+@app.get("/api/admin/metrics")
+def admin_metrics(conn=Depends(db_conn)):
+    try:
+        row = db_execute(conn, "SELECT COUNT(*) AS count FROM jobs").fetchone()
+        total_jobs = row["count"] if row else 0
+
+        if is_postgres():
+            row = db_execute(
+                conn,
+                "SELECT COUNT(*) AS count FROM jobs WHERE created_at >= NOW() - INTERVAL '1 day'",
+            ).fetchone()
+        else:
+            row = db_execute(
+                conn,
+                "SELECT COUNT(*) AS count FROM jobs WHERE created_at >= datetime('now','-1 day')",
+            ).fetchone()
+        jobs_last_24h = row["count"] if row else 0
+
+        by_source = [
+            dict(r)
+            for r in db_execute(
+                conn,
+                """
+                SELECT COALESCE(source, '') AS source, COUNT(*) AS count
+                  FROM jobs
+                 GROUP BY source
+                 ORDER BY count DESC
+                """,
+            ).fetchall()
+        ]
+
+        if is_postgres():
+            daily_counts = [
+                dict(r)
+                for r in db_execute(
+                    conn,
+                    """
+                    SELECT to_char(created_at::date, 'YYYY-MM-DD') AS date,
+                           COUNT(*) AS count
+                      FROM jobs
+                     WHERE created_at >= NOW() - INTERVAL '14 days'
+                     GROUP BY 1
+                     ORDER BY 1
+                    """,
+                ).fetchall()
+            ]
+        else:
+            daily_counts = [
+                dict(r)
+                for r in db_execute(
+                    conn,
+                    """
+                    SELECT date(created_at) AS date,
+                           COUNT(*) AS count
+                      FROM jobs
+                     WHERE created_at >= datetime('now','-14 days')
+                     GROUP BY date
+                     ORDER BY date
+                    """,
+                ).fetchall()
+            ]
+
+        return {
+            "total_jobs": total_jobs,
+            "jobs_last_24h": jobs_last_24h,
+            "by_source": by_source,
+            "daily_counts": daily_counts,
+            "totalJobs": total_jobs,
+            "jobsLast24h": jobs_last_24h,
+            "jobsBySource": by_source,
+            "dailyHarvested": daily_counts,
+            "users": None,
+            "trialsActive": None,
+        }
+    except Exception as exc:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(exc))
+
+def _run_pack(pack: dict, conn) -> dict:
+    started_at = datetime.now(timezone.utc)
+    status = "ok"
+    error_text = None
+    inserted = 0
+    updated = 0
+    marked_inactive = 0
+    archived = 0
+    source_errors: list[dict] = []
+
+    try:
+        profile = load_profile_for_uid(None)
+        jobs, source_errors = run_harvest_pack(pack.get("config", {}) or {}, profile)
+        rows = to_rows(dedupe(jobs))
+
+        row = db_execute(conn, "SELECT COUNT(*) AS count FROM jobs").fetchone()
+        before = row["count"] if row else 0
+
+        if rows:
+            upsert_jobs(rows, conn)
+
+        row = db_execute(conn, "SELECT COUNT(*) AS count FROM jobs").fetchone()
+        after = row["count"] if row else 0
+
+        inserted = max(after - before, 0)
+        updated = max(len(rows) - inserted, 0)
+        marked_inactive, archived = maintain_jobs(conn)
+        if source_errors and status == "ok":
+            status = "partial"
+    except Exception as exc:
+        status = "error"
+        error_text = str(exc)
+
+    finished_at = datetime.now(timezone.utc)
+    db_execute(
+        conn,
+        """
+        INSERT INTO harvest_pack_runs
+            (pack_slug, started_at, finished_at, status, inserted_count, updated_count,
+             inactive_marked_count, archived_count, error_text)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            pack.get("slug"),
+            started_at,
+            finished_at,
+            status,
+            inserted,
+            updated,
+            marked_inactive,
+            archived,
+            error_text,
+        ),
+    )
+    if status == "ok":
+        if is_postgres():
+            db_execute(
+                conn,
+                "UPDATE harvest_packs SET last_run_at = NOW(), updated_at = NOW() WHERE slug = ?",
+                (pack.get("slug"),),
+            )
+        else:
+            db_execute(
+                conn,
+                "UPDATE harvest_packs SET last_run_at = datetime('now'), updated_at = datetime('now') WHERE slug = ?",
+                (pack.get("slug"),),
+            )
+    conn.commit()
+
+    return {
+        "slug": pack.get("slug"),
+        "status": status,
+        "inserted": inserted,
+        "updated": updated,
+        "marked_inactive": marked_inactive,
+        "archived": archived,
+        "error": error_text,
+        "source_errors": source_errors,
+        "started_at": started_at.isoformat(),
+        "finished_at": finished_at.isoformat(),
+    }
+
+@app.post("/admin/harvest/run")
+def admin_harvest_run():
+    return {"ok": True, "message": "Not wired yet"}
+
+@app.get("/api/admin/packs")
+def admin_list_packs(conn=Depends(db_conn)):
+    try:
+        ensure_harvest_packs(conn)
+        return {"packs": _list_packs(conn)}
+    except Exception as exc:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(exc))
+
+@app.post("/api/admin/packs")
+def admin_create_pack(payload: PackCreateIn, conn=Depends(db_conn)):
+    name = (payload.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
+
+    slug_seed = (payload.slug or name).strip()
+    slug_base = _slugify(slug_seed)
+    if not slug_base:
+        raise HTTPException(status_code=400, detail="invalid slug")
+
+    try:
+        ensure_harvest_packs(conn)
+        slug = slug_base
+        suffix = 2
+        while db_execute(
+            conn, "SELECT 1 FROM harvest_packs WHERE slug = ?", (slug,)
+        ).fetchone():
+            slug = f"{slug_base}-{suffix}"
+            suffix += 1
+
+        config = payload.config or {}
+        if is_postgres():
+            db_execute(
+                conn,
+                """
+                INSERT INTO harvest_packs
+                    (slug, name, description, is_enabled, config, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?::jsonb, NOW(), NOW())
+                """,
+                (slug, name, payload.description, payload.is_enabled, json.dumps(config)),
+            )
+        else:
+            db_execute(
+                conn,
+                """
+                INSERT INTO harvest_packs
+                    (slug, name, description, is_enabled, config, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+                """,
+                (
+                    slug,
+                    name,
+                    payload.description,
+                    1 if payload.is_enabled else 0,
+                    json.dumps(config),
+                ),
+            )
+        conn.commit()
+
+        row = db_execute(
+            conn, "SELECT * FROM harvest_packs WHERE slug = ?", (slug,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=500, detail="pack creation failed")
+        return _pack_row_to_dict(row)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(exc))
+
+@app.put("/api/admin/packs/{slug}")
+def admin_update_pack(slug: str, payload: PackUpdateIn, conn=Depends(db_conn)):
+    try:
+        ensure_harvest_packs(conn)
+        updates = []
+        params: list = []
+
+        if payload.name is not None:
+            updates.append("name = ?")
+            params.append(payload.name)
+        if payload.description is not None:
+            updates.append("description = ?")
+            params.append(payload.description)
+        if payload.is_enabled is not None:
+            updates.append("is_enabled = ?")
+            params.append(payload.is_enabled if is_postgres() else int(payload.is_enabled))
+        if payload.config is not None:
+            if is_postgres():
+                updates.append("config = ?::jsonb")
+            else:
+                updates.append("config = ?")
+            params.append(json.dumps(payload.config))
+
+        updates.append("updated_at = NOW()" if is_postgres() else "updated_at = datetime('now')")
+        params.append(slug)
+
+        sql = f"UPDATE harvest_packs SET {', '.join(updates)} WHERE slug = ?"
+        db_execute(conn, sql, tuple(params))
+        conn.commit()
+
+        row = db_execute(conn, "SELECT * FROM harvest_packs WHERE slug = ?", (slug,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Pack not found")
+        return _pack_row_to_dict(row)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(exc))
+
+@app.delete("/api/admin/packs/{slug}")
+def admin_delete_pack(slug: str, conn=Depends(db_conn)):
+    try:
+        ensure_harvest_packs(conn)
+        ts = "NOW()" if is_postgres() else "datetime('now')"
+        db_execute(
+            conn,
+            f"UPDATE harvest_packs SET deleted_at = {ts}, is_enabled = ?, updated_at = {ts} WHERE slug = ?",
+            (False if is_postgres() else 0, slug),
+        )
+        conn.commit()
+        return {"ok": True, "slug": slug}
+    except Exception as exc:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(exc))
+
+@app.post("/api/admin/packs/{slug}/run")
+def admin_run_pack(slug: str, conn=Depends(db_conn)):
+    try:
+        ensure_harvest_packs(conn)
+        row = db_execute(conn, "SELECT * FROM harvest_packs WHERE slug = ?", (slug,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Pack not found")
+        pack = _pack_row_to_dict(row)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(exc))
+    return _run_pack(pack, conn)
+
+@app.post("/api/admin/packs/run-enabled")
+def admin_run_enabled_packs(conn=Depends(db_conn)):
+    try:
+        ensure_harvest_packs(conn)
+        packs = _list_packs(conn, enabled_only=True)
+    except Exception as exc:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(exc))
+    if not packs:
+        return {"ok": True, "ran_packs": 0, "message": "No enabled packs", "results": []}
+    results = []
+    for pack in packs:
+        try:
+            results.append(_run_pack(pack, conn))
+        except Exception as exc:
+            results.append(
+                {
+                    "slug": pack.get("slug"),
+                    "status": "error",
+                    "inserted": 0,
+                    "updated": 0,
+                    "marked_inactive": 0,
+                    "archived": 0,
+                    "error": str(exc),
+                }
+            )
+    return {"ok": True, "ran_packs": len(results), "results": results}
+
+@app.post("/api/admin/harvest-all")
+@app.post("/api/admin/harvest/run")
+def admin_harvest_all(conn=Depends(db_conn)):
+    try:
+        row = db_execute(conn, "SELECT COUNT(*) AS count FROM jobs").fetchone()
+        before = row["count"] if row else 0
+
+        subprocess.run([sys.executable, "-m", "src.main", "seed-harvest"], check=False)
+        marked_inactive, archived = maintain_jobs(conn)
+
+        row = db_execute(conn, "SELECT COUNT(*) AS count FROM jobs").fetchone()
+        after = row["count"] if row else 0
+
+        inserted = max(after - before, 0)
+        return {
+            "inserted": inserted,
+            "updated": 0,
+            "marked_inactive": marked_inactive,
+            "archived": archived,
+        }
+    except Exception as exc:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(exc))
+
+@app.post("/api/admin/cleanup")
+def admin_cleanup(conn=Depends(db_conn)):
+    try:
+        marked_inactive, archived = maintain_jobs(conn)
+        deduped = dedupe_jobs(conn)
+        return {
+            "marked_inactive": marked_inactive,
+            "archived": archived,
+            "deduped": deduped,
+        }
+    except Exception as exc:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(exc))
 
 @app.post("/persona")
 def save_persona(p: PersonaIn):
@@ -113,6 +688,7 @@ def get_persona(uid: str = Query(...)):
     return load_profile_for_uid(uid)
 
 @app.get("/jobs")
+@app.get("/api/jobs")
 def jobs(
     uid: str | None = Query(default=None),
     source: str | None = Query(
@@ -121,8 +697,11 @@ def jobs(
     ),
     contains: str | None = None,
     limit: int = 50,
+    offset: int = 0,
     use_scoring: bool = True,
 ):
+    limit = max(1, min(limit, 200))
+    offset = max(0, offset)
     # 1) Base: fetch jobs by recency (same as before)
     if is_postgres():
         # posted_at is TEXT in Postgres schema; created_at is TIMESTAMP.
@@ -164,7 +743,11 @@ def jobs(
     if use_scoring and profile:
         rows = rank_jobs(rows, profile)
 
-    return rows[:limit]
+    total = len(rows)
+    page = rows[offset : offset + limit]
+    next_offset = offset + limit if offset + limit < total else None
+
+    return {"items": page, "nextOffset": next_offset, "total": total}
 
 @app.get("/auth/gmail/start")
 def gmail_auth_start(uid: str = Query(...)):

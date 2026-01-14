@@ -47,13 +47,14 @@ def harvest_adzuna(profile: dict, pages: int = 1, results_per_page: int = 50) ->
                     print(f"[adzuna] {country} '{q}' error: {e}")
                     continue
                 for d in data.get("results", []):
+                    ext = d.get("id") or d.get("adref")
                     out.append(JobPosting(
                         source=f"adzuna:{country}",
                         company=(d.get("company") or {}).get("display_name",""),
                         title=d.get("title",""),
                         location=(d.get("location") or {}).get("display_name",""),
                         url=d.get("redirect_url") or "",
-                        external_id=str(d.get("adref") or ""),
+                        external_id=str(ext) if ext is not None else None,
                         posted_at=d.get("created"),
                         jd_text=d.get("description") or "",
                         salary=None, tags=None, visa=None

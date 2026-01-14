@@ -2,8 +2,8 @@ from __future__ import annotations
 import imaplib, email, os, datetime as dt
 from email import policy
 from dotenv import load_dotenv
-from storage.db import upsert_jobs
-from harvest.sources import to_rows, dedupe
+from src.storage.db import upsert_jobs
+from src.harvest.sources import to_rows, dedupe
 from .email_parser import parse_naukri_email_html
 
 load_dotenv()

@@ -35,6 +35,9 @@ export default function Subscribe() {
   const [period, setPeriod] = useState<"monthly" | "quarterly">("quarterly");
   const [notice, setNotice] = useState<string | null>(null);
   const [uid, setUid] = useState<string | null>(null);
+  const [trialStatus, setTrialStatus] = useState<
+    "idle" | "starting" | "started"
+  >("idle");
 
   const savePct = useMemo(() => calcSavePct(), []);
   const monthlyUrl = import.meta.env.VITE_INSTAMOJO_MONTHLY_URL as
@@ -47,7 +50,8 @@ export default function Subscribe() {
   const priceAmount =
     period === "monthly" ? `₹${MONTHLY_PRICE}` : `₹${QUARTERLY_PRICE}`;
   const priceSuffix = period === "monthly" ? "/ mo" : "/ 3 mo";
-  const trialBtnDisabled = isTrialUsed || isBlocked || loading;
+  const trialBtnDisabled =
+    isTrialUsed || isBlocked || loading || trialStatus !== "idle";
   const payUrlMissing = !payUrl;
 
   useEffect(() => {
@@ -85,12 +89,17 @@ export default function Subscribe() {
       return;
     }
     setNotice(null);
+    setTrialStatus("starting");
     const res = await startTrialOnce(uid);
     if (res === "already_used") {
       setNotice("Trial already used. Please choose a plan to continue.");
+      setTrialStatus("idle");
       return;
     }
-    navigate(`${ONBOARDING_PATH}?next=/dashboard`, { replace: true });
+    setTrialStatus("started");
+    setTimeout(() => {
+      navigate(`${ONBOARDING_PATH}?status=trial`, { replace: true });
+    }, 1000);
   };
 
   const onPay = () => {
@@ -98,7 +107,9 @@ export default function Subscribe() {
       setNotice("Payment URL not configured yet.");
       return;
     }
-    window.open(payUrl, "_blank", "noopener,noreferrer");
+    sessionStorage.setItem("jb_pending_plan", period);
+    sessionStorage.setItem("jb_pending_started_at", String(Date.now()));
+    window.location.href = payUrl;
   };
 
   return (
@@ -240,7 +251,13 @@ export default function Subscribe() {
                 color: trialBtnDisabled ? "rgba(0,0,0,0.4)" : "#fff",
               }}
             >
-              {isTrialUsed ? "Trial already used" : "Start 2-day trial"}
+              {trialStatus === "started"
+                ? "Trial started"
+                : trialStatus === "starting"
+                  ? "Starting..."
+                  : isTrialUsed
+                    ? "Trial already used"
+                    : "Start 2-day trial"}
             </button>
             <div
               style={{

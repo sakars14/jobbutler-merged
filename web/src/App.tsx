@@ -8,8 +8,12 @@ import Support from "./pages/Support";
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
 import Subscribe from "./pages/Subscribe";
+import InstamojoReturn from "./pages/InstamojoReturn";
+import Admin from "./pages/Admin";
 import { BillingProvider } from "./billing/BillingProvider";
 import RequireSubscription from "./routes/RequireSubscription";
+import RequireAdmin from "./components/RequireAdmin";
+import RequireAuth from "./components/RequireAuth";
 
 function App() {
   return (
@@ -32,9 +36,9 @@ function App() {
           <Route
             path="/support"
             element={
-              <RequireSubscription>
+              <RequireAuth>
                 <Support />
-              </RequireSubscription>
+              </RequireAuth>
             }
           />
           <Route path="/login" element={<Login />} />
@@ -44,6 +48,26 @@ function App() {
               <RequireSubscription>
                 <Signup />
               </RequireSubscription>
+            }
+          />
+          <Route
+            path="/persona"
+            element={
+              <RequireSubscription>
+                <Signup />
+              </RequireSubscription>
+            }
+          />
+          <Route
+            path="/billing/instamojo/return"
+            element={<InstamojoReturn />}
+          />
+          <Route
+            path="/admin"
+            element={
+              <RequireAdmin>
+                <Admin />
+              </RequireAdmin>
             }
           />
           <Route path="/subscribe" element={<Subscribe />} />

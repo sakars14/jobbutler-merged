@@ -5,7 +5,8 @@ import { onAuthStateChanged, signOut } from "firebase/auth";
 import { doc, getDoc } from "firebase/firestore";
 import { auth, db } from "../firebase";
 import { useBilling } from "../billing/BillingProvider";
-import { formatHhMmFromMs } from "../billing/billingStore";
+import { formatDdHhMmSsFromMs, formatHhMmFromMs } from "../billing/billingStore";
+import { loadVisited, markVisited, type VisitedMap } from "../lib/visitedJobs";
 
 type PersonaShape = {
   roles_target?: string[];
@@ -35,6 +36,7 @@ type Job = {
 };
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
+const JOBS_PAGE_SIZE = 50;
 
 export default function Dashboard() {
   const nav = useNavigate();
@@ -45,12 +47,15 @@ export default function Dashboard() {
     isPaid,
     isTrialActive,
     trialRemainingMs,
+    subscriptionRemainingMs,
   } = useBilling();
   const [trialTick, setTrialTick] = useState(0);
 
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [jobsLoading, setJobsLoading] = useState(true);
+  const [jobsLoadingMore, setJobsLoadingMore] = useState(false);
+  const [jobsNextOffset, setJobsNextOffset] = useState<number | null>(null);
   const [uid, setUid] = useState<string | null>(null);
     // Dashboard filters (client-side)
     const [recencyDays, setRecencyDays] = useState<number | "all">("all");
@@ -60,6 +65,8 @@ export default function Dashboard() {
     const [q, setQ] = useState("");
   
   const [jobsErr, setJobsErr] = useState<string | null>(null);
+  const [jobsLoadMoreErr, setJobsLoadMoreErr] = useState<string | null>(null);
+  const [visitedJobs, setVisitedJobs] = useState<VisitedMap>({});
 
   const [gmailConnected, setGmailConnected] = useState<boolean | null>(null);
   const [gmailStatusLoading, setGmailStatusLoading] = useState(true);
@@ -87,6 +94,10 @@ export default function Dashboard() {
     return () => unsub();
   }, [nav]);
 
+  useEffect(() => {
+    setVisitedJobs(loadVisited(uid || undefined));
+  }, [uid]);
+
   // Load profile (for name + persona)
   useEffect(() => {
     (async () => {
@@ -102,34 +113,81 @@ export default function Dashboard() {
     })();
   }, [uid]);
 
-  const loadJobs = useCallback(async (userId: string) => {
-    const u = auth.currentUser;
-    setJobsLoading(true);
-    setJobsErr(null);
-    if (!u) {
-      setJobsLoading(false);
-      return;
-    }
+  const loadJobs = useCallback(
+    async (
+      userId: string,
+      opts?: {
+        offset?: number;
+        append?: boolean;
+      }
+    ) => {
+      const offset = opts?.offset ?? 0;
+      const append = opts?.append ?? false;
+      const u = auth.currentUser;
 
-    try {
-      const token = await u.getIdToken();
-      const res = await fetch(`${API_BASE}/jobs?uid=${encodeURIComponent(userId)}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      if (!append) {
+        setJobsLoading(true);
+        setJobsErr(null);
+      } else {
+        setJobsLoadingMore(true);
+        setJobsLoadMoreErr(null);
+      }
 
-      if (!res.ok) throw new Error(`Jobs API failed (${res.status})`);
-      const data = await res.json();
+      if (!u) {
+        if (!append) setJobsLoading(false);
+        else setJobsLoadingMore(false);
+        return;
+      }
 
-      // supports multiple shapes: {items:[]}, {jobs:[]}, [] directly
-      const items: Job[] = Array.isArray(data) ? data : (data.items || data.jobs || []);
-      setJobs(items);
-    } catch (e: any) {
-      setJobsErr(e?.message || "Failed to load jobs");
-      setJobs([]);
-    } finally {
-      setJobsLoading(false);
-    }
-  }, []);
+      try {
+        const token = await u.getIdToken();
+        const res = await fetch(
+          `${API_BASE}/jobs?uid=${encodeURIComponent(
+            userId
+          )}&limit=${JOBS_PAGE_SIZE}&offset=${offset}`,
+          {
+            headers: { Authorization: `Bearer ${token}` },
+          }
+        );
+
+        if (!res.ok) throw new Error(`Jobs API failed (${res.status})`);
+        const data = await res.json();
+
+        // supports multiple shapes: {items:[]}, {jobs:[]}, [] directly
+        const items: Job[] = Array.isArray(data)
+          ? data
+          : data.items || data.jobs || [];
+        const nextOffset =
+          !Array.isArray(data) && data && typeof data === "object"
+            ? data.nextOffset ?? null
+            : items.length < JOBS_PAGE_SIZE
+              ? null
+              : offset + items.length;
+
+        if (append) {
+          setJobs((prev) => [...prev, ...items]);
+        } else {
+          setJobs(items);
+        }
+        setJobsNextOffset(nextOffset);
+      } catch (e: any) {
+        if (append) {
+          setJobsLoadMoreErr(e?.message || "Failed to load more jobs");
+        } else {
+          setJobsErr(e?.message || "Failed to load jobs");
+          setJobs([]);
+          setJobsNextOffset(null);
+        }
+      } finally {
+        if (append) {
+          setJobsLoadingMore(false);
+        } else {
+          setJobsLoading(false);
+        }
+      }
+    },
+    []
+  );
 
   const loadGmailStatus = useCallback(async (userId: string) => {
     const u = auth.currentUser;
@@ -324,6 +382,11 @@ export default function Dashboard() {
     }
   };
 
+  const handleLoadMore = async () => {
+    if (!uid || jobsLoadingMore || jobsNextOffset === null) return;
+    await loadJobs(uid, { offset: jobsNextOffset, append: true });
+  };
+
   const filteredJobs = useMemo(() => {
     const now = Date.now();
     const norm = (s: string) => s.toLowerCase();
@@ -392,6 +455,12 @@ export default function Dashboard() {
 
   const showTrialBanner =
     !billingLoading && isTrialActive && !isPaid && !isAdmin;
+  const showPaidBanner =
+    !billingLoading && isPaid && subscriptionRemainingMs > 0;
+  const subscriptionCountdown = useMemo(
+    () => formatDdHhMmSsFromMs(subscriptionRemainingMs),
+    [subscriptionRemainingMs]
+  );
   const trialCountdown = useMemo(
     () => formatHhMmFromMs(trialRemainingMs),
     [trialRemainingMs, trialTick]
@@ -400,6 +469,23 @@ export default function Dashboard() {
   return (
     <div className="dash-page">
       <div className="dash-card">
+        {showPaidBanner && (
+          <div
+            className="dash-banner"
+            style={{
+              width: "100%",
+              textAlign: "left",
+              marginBottom: 12,
+              padding: 12,
+              borderRadius: 12,
+              border: "1px solid rgba(16, 185, 129, 0.35)",
+              background: "rgba(16, 185, 129, 0.08)",
+              color: "#065f46",
+            }}
+          >
+            Subscription active - {subscriptionCountdown} remaining
+          </div>
+        )}
         {showTrialBanner && (
           <button
             type="button"
@@ -429,6 +515,11 @@ export default function Dashboard() {
             <button className="dash-link" type="button" onClick={() => nav("/support")}>
               Support
             </button>
+            {isAdmin && (
+              <button className="dash-link" type="button" onClick={() => nav("/admin")}>
+                Admin
+              </button>
+            )}
 
             <button className="dash-user" type="button" onClick={() => nav("/signup")}>
               {displayName}
@@ -641,26 +732,51 @@ export default function Dashboard() {
           ) : jobs.length === 0 ? (
             <div className="dash-muted">No jobs to show yet.</div>
           ) : (
-            <div className="dash-table-wrap">
-              <table className="dash-table">
-                <thead>
-                  <tr>
-                    <th>Title</th>
-                    <th>Company</th>
-                    <th>Location</th>
-                    <th>Link</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredJobs.map((j, idx) => (
-                    <tr key={String(j.id ?? idx)}>
-                      <td className="dash-td-strong">{j.title || "-"}</td>
-                      <td>{j.company || "-"}</td>
-                      <td>{j.location || "-"}</td>
+            <>
+              <div className="dash-table-wrap">
+                <table className="dash-table">
+                  <thead>
+                    <tr>
+                      <th>Title</th>
+                      <th>Company</th>
+                      <th>Location</th>
+                      <th>Link</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredJobs.map((j, idx) => (
+                      <tr key={String(j.id ?? idx)}>
+                        <td className="dash-td-strong">{j.title || "-"}</td>
+                        <td>{j.company || "-"}</td>
+                        <td>{j.location || "-"}</td>
                       <td>
                         {j.url ? (
-                          <a className="dash-a" href={j.url} target="_blank" rel="noreferrer">
-                            Open
+                          <a
+                            className="dash-a"
+                            href={j.url}
+                            target="_blank"
+                            rel="noreferrer"
+                            onClick={() => {
+                              const jobKey = j.id ?? j.url;
+                              if (!jobKey) return;
+                              setVisitedJobs(
+                                markVisited(uid || undefined, jobKey)
+                              );
+                            }}
+                            style={{
+                              color: visitedJobs[String(j.id ?? j.url)]
+                                ? "rgba(15,23,42,0.45)"
+                                : undefined,
+                            }}
+                            title={
+                              visitedJobs[String(j.id ?? j.url)]
+                                ? `Opened ${new Date(
+                                    visitedJobs[String(j.id ?? j.url)]
+                                  ).toLocaleString()}`
+                                : "Open job link"
+                            }
+                          >
+                            {visitedJobs[String(j.id ?? j.url)] ? "Opened" : "Open"}
                           </a>
                         ) : (
                           "-"
@@ -668,9 +784,27 @@ export default function Dashboard() {
                       </td>
                     </tr>
                   ))}
-                </tbody>
-              </table>
-            </div>
+                  </tbody>
+                </table>
+              </div>
+              {jobsNextOffset !== null && (
+                <div className="dash-actions" style={{ marginTop: 12 }}>
+                  <button
+                    className="dash-pill"
+                    type="button"
+                    onClick={handleLoadMore}
+                    disabled={jobsLoadingMore}
+                  >
+                    {jobsLoadingMore ? "Loading..." : "Load more"}
+                  </button>
+                  {jobsLoadMoreErr && (
+                    <div className="dash-error" style={{ marginLeft: 12 }}>
+                      {jobsLoadMoreErr}
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
           )}
         </section>
       </div>

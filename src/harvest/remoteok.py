@@ -16,5 +16,6 @@ def harvest_remoteok()->List[JobPosting]:
         if not title: continue
         company=d.get('company',''); location=d.get('location','Remote'); url2 = d.get("apply_url") or d.get("url") or f"https://remoteok.com/remote-jobs/{d.get('slug') or d.get('id')}"
         posted=str(d.get('epoch') or d.get('date') or ''); jd=(d.get('description') or '')[:10000]
-        out.append(JobPosting(source='remoteok',company=company,title=title,location=location,url=url2,external_id=str(d.get('id') or ''),posted_at=posted,jd_text=jd))
+        ext = d.get("id") or d.get("slug")
+        out.append(JobPosting(source='remoteok',company=company,title=title,location=location,url=url2,external_id=str(ext) if ext is not None else None,posted_at=posted,jd_text=jd))
     return out
