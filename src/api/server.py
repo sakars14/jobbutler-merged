@@ -8,7 +8,8 @@ from typing import Generator
 import contextlib
 import json, os, subprocess, time, secrets, smtplib, sys, re, traceback
 from email.message import EmailMessage
-from urllib.parse import urlencode, parse_qsl
+from urllib.parse import urlencode, parse_qs
+from uuid import uuid4
 
 import requests  # already in requirements.txt
 from firebase_admin import firestore as admin_firestore
@@ -36,8 +37,12 @@ from src.storage.db import (
 )
 from src.harvest.sources import dedupe, to_rows
 from src.harvest.packs import run_harvest_pack
-from src.utils.firebase_admin_client import get_firestore_client, get_uid_by_phone
-from src.utils.instamojo import verify_instamojo_webhook_mac
+from src.utils.firebase_admin_client import (
+    get_firestore_client,
+    get_uid_by_phone,
+    get_uid_by_email,
+)
+from src.utils.instamojo import compute_instamojo_mac
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -212,6 +217,85 @@ def _normalize_phone(raw: str | None) -> str | None:
         return f"+91{digits[2:]}"
     return f"+{digits}"
 
+async def _parse_instamojo_payload(request: Request) -> dict[str, str]:
+    try:
+        body = await request.body()
+    except Exception:
+        body = b""
+    if not body:
+        return {}
+
+    content_type = (request.headers.get("content-type") or "").lower()
+    if "application/json" in content_type:
+        try:
+            raw = json.loads(body.decode("utf-8"))
+        except Exception:
+            raw = {}
+        if not isinstance(raw, dict):
+            return {}
+        return {str(k): str(v) for k, v in raw.items()}
+
+    parsed = parse_qs(body.decode("utf-8"), keep_blank_values=True)
+    return {k: str(v[0]) if v else "" for k, v in parsed.items()}
+
+
+def _infer_instamojo_plan(payload: dict, plan_param: str | None) -> str | None:
+    raw_plan = (plan_param or "").strip().lower()
+    if raw_plan in {"1m", "monthly", "month", "1-month", "one_month"}:
+        return "1m"
+    if raw_plan in {"3m", "quarterly", "quarter", "3-month", "three_month"}:
+        return "3m"
+
+    purpose = (payload.get("purpose") or "").lower()
+    if "3 month" in purpose or "quarter" in purpose:
+        return "3m"
+    if "1 month" in purpose or "monthly" in purpose:
+        return "1m"
+
+    amount_raw = payload.get("amount") or ""
+    try:
+        amount = float(amount_raw)
+    except (TypeError, ValueError):
+        amount = 0.0
+    if amount >= 1000:
+        return "3m"
+    if amount > 0:
+        return "1m"
+    return None
+
+
+def _activate_billing(db, uid: str, plan: str, payment_id: str | None, payload: dict) -> None:
+    days = 90 if plan == "3m" else 30
+    period = "quarterly" if plan == "3m" else "monthly"
+    now = datetime.now(timezone.utc)
+    ends_at = now + timedelta(days=days)
+    payment_meta = {
+        "payment_id": payment_id or payload.get("payment_id"),
+        "payment_request_id": payload.get("payment_request_id"),
+        "amount": payload.get("amount"),
+        "purpose": payload.get("purpose"),
+        "status": payload.get("payment_status") or payload.get("status"),
+        "buyer_phone": payload.get("buyer_phone"),
+        "buyer_email": payload.get("buyer_email") or payload.get("buyer"),
+    }
+
+    doc_ref = db.collection("billing").document(uid)
+    doc_ref.set(
+        {
+            "status": "active",
+            "plan": "pro",
+            "period": period,
+            "subscriptionStartedAt": admin_firestore.SERVER_TIMESTAMP,
+            "subscriptionEndsAt": ends_at,
+            "lastPayment": payment_meta,
+            "trialEndsAt": None,
+            "trialStartedAt": None,
+            "trialUsed": True,
+            "updatedAt": admin_firestore.SERVER_TIMESTAMP,
+        },
+        merge=True,
+    )
+
 def _list_packs(conn, enabled_only: bool = False) -> list[dict]:
     sql = "SELECT * FROM harvest_packs WHERE deleted_at IS NULL"
     params: tuple = ()
@@ -234,72 +318,105 @@ def health():
 
 @app.post("/api/billing/instamojo/webhook")
 async def instamojo_webhook(request: Request):
-    body = await request.body()
-    payload = dict(parse_qsl(body.decode("utf-8")))
-    salt = os.getenv("INSTAMOJO_SALT")
-    if not salt:
-        print("[instamojo] missing INSTAMOJO_SALT")
-        raise HTTPException(status_code=500, detail="instamojo not configured")
+    payload = await _parse_instamojo_payload(request)
+    salt = os.getenv("INSTAMOJO_SALT", "")
+    mac_provided = payload.get("mac") or payload.get("MAC") or ""
+    mac_calc = compute_instamojo_mac(payload, salt) if salt else ""
+    mac_ok = bool(mac_calc) and bool(mac_provided) and mac_calc.lower() == mac_provided.lower()
 
-    if not verify_instamojo_webhook_mac(payload, salt):
-        print("[instamojo] invalid MAC")
-        raise HTTPException(status_code=400, detail="invalid signature")
-
-    status = (payload.get("status") or "").strip().lower()
-    if status != "credit":
-        return {"ok": True}
-
-    purpose = (payload.get("purpose") or "").lower()
-    amount_raw = payload.get("amount") or ""
-    try:
-        amount = float(amount_raw)
-    except (TypeError, ValueError):
-        amount = 0.0
-
-    days = 90 if ("3" in purpose or "quarter" in purpose or amount >= 1000) else 30
-    period = "quarterly" if days == 90 else "monthly"
-
-    buyer_phone = _normalize_phone(payload.get("buyer_phone"))
-    if not buyer_phone:
-        print("[instamojo] missing buyer_phone")
-        return {"ok": True}
+    status_raw = payload.get("payment_status") or payload.get("status") or ""
+    status_norm = status_raw.strip().lower()
 
     try:
         db = get_firestore_client()
     except Exception as exc:
-        print(f"[instamojo] firebase admin not configured: {exc}")
+        print(f"[instamojo] firestore not configured: {exc}")
         raise HTTPException(status_code=500, detail="firebase admin not configured")
 
-    uid = get_uid_by_phone(buyer_phone)
-    if not uid:
-        print(f"[instamojo] no user for phone {buyer_phone}")
-        return {"ok": True}
-
-    now = datetime.now(timezone.utc)
-    ends_at = now + timedelta(days=days)
-    payment_meta = {
-        "payment_id": payload.get("payment_id"),
-        "payment_request_id": payload.get("payment_request_id"),
+    payment_id = payload.get("payment_id")
+    payment_request_id = payload.get("payment_request_id")
+    doc_id = payment_id or payment_request_id or str(uuid4())
+    payment_doc = {
+        "provider": "instamojo",
+        "paymentId": payment_id,
+        "paymentRequestId": payment_request_id,
+        "paymentStatus": status_raw,
         "amount": payload.get("amount"),
         "purpose": payload.get("purpose"),
-        "status": payload.get("status"),
-        "buyer_phone": buyer_phone,
+        "buyerName": payload.get("buyer_name"),
+        "buyerPhone": payload.get("buyer_phone"),
+        "buyerEmail": payload.get("buyer_email") or payload.get("buyer"),
+        "macOk": mac_ok,
+        "raw": payload,
+        "receivedAt": admin_firestore.SERVER_TIMESTAMP,
     }
+    db.collection("instamojoPayments").document(str(doc_id)).set(payment_doc, merge=True)
 
-    doc_ref = db.collection("billing").document(uid)
-    doc_ref.set(
-        {
-            "status": "active",
-            "plan": "pro",
-            "period": period,
-            "subscriptionStartedAt": admin_firestore.SERVER_TIMESTAMP,
-            "subscriptionEndsAt": ends_at,
-            "lastPayment": payment_meta,
-            "updatedAt": admin_firestore.SERVER_TIMESTAMP,
-        },
-        merge=True,
-    )
+    if not mac_ok:
+        print("[instamojo] invalid MAC")
+        return {"ok": True, "mac_ok": False}
 
+    if status_norm not in {"credit", "success"}:
+        return {"ok": True}
+
+    buyer_phone = _normalize_phone(payload.get("buyer_phone"))
+    buyer_email = payload.get("buyer_email") or payload.get("buyer")
+    uid = None
+    if buyer_phone:
+        uid = get_uid_by_phone(buyer_phone)
+    if not uid and buyer_email:
+        uid = get_uid_by_email(buyer_email)
+    if not uid:
+        print("[instamojo] no user for buyer")
+        return {"ok": True}
+
+    plan = _infer_instamojo_plan(payload, payload.get("plan"))
+    if not plan:
+        print("[instamojo] unable to infer plan")
+        return {"ok": True}
+
+    _activate_billing(db, uid, plan, payment_id, payload)
+    return {"ok": True}
+
+
+class InstamojoConfirmIn(BaseModel):
+    uid: str
+    plan: str | None = None
+    payment_id: str | None = None
+    payment_request_id: str | None = None
+
+
+@app.post("/api/billing/instamojo/confirm")
+def instamojo_confirm(body: InstamojoConfirmIn):
+    payment_id = body.payment_id or body.payment_request_id
+    if not payment_id:
+        return {"ok": False, "pending": False, "error": "missing_payment_id"}
+
+    try:
+        db = get_firestore_client()
+    except Exception as exc:
+        print(f"[instamojo] firestore not configured: {exc}")
+        raise HTTPException(status_code=500, detail="firebase admin not configured")
+
+    doc = db.collection("instamojoPayments").document(payment_id).get()
+    if not doc.exists:
+        return {"ok": False, "pending": True}
+
+    data = doc.to_dict() or {}
+    if not data.get("macOk", False):
+        return {"ok": False, "pending": False, "error": "mac_invalid"}
+
+    status_raw = data.get("paymentStatus") or ""
+    status_norm = str(status_raw).strip().lower()
+    if status_norm not in {"credit", "success"}:
+        return {"ok": False, "pending": False, "error": "payment_not_success"}
+
+    payload = data.get("raw") or {}
+    plan = _infer_instamojo_plan(payload, body.plan)
+    if not plan:
+        return {"ok": False, "pending": False, "error": "plan_unknown"}
+
+    _activate_billing(db, body.uid, plan, payment_id, payload)
     return {"ok": True}
 
 @app.get("/admin/metrics")
