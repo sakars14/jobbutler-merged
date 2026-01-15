@@ -7,6 +7,13 @@ import { auth, db } from "../firebase";
 import { useBilling } from "../billing/BillingProvider";
 import { formatDdHhMmSsFromMs, formatHhMmFromMs } from "../billing/billingStore";
 import { loadVisited, markVisited, type VisitedMap } from "../lib/visitedJobs";
+import {
+  EXPERIENCE_OPTIONS,
+  inferExperienceFromTitle,
+  levelRank,
+  prettyExperience,
+  type ExperienceLevel,
+} from "../utils/experience";
 
 type PersonaShape = {
   roles_target?: string[];
@@ -14,6 +21,7 @@ type PersonaShape = {
   locations?: string[];
   roles?: string[];
   skills?: string[];
+  experienceLevel?: ExperienceLevel;
 };
 
 type UserProfile = {
@@ -33,6 +41,7 @@ type Job = {
   posted_at?: string;
   description?: string;
   summary?: string;
+  role?: string;
 };
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
@@ -57,13 +66,14 @@ export default function Dashboard() {
   const [jobsLoadingMore, setJobsLoadingMore] = useState(false);
   const [jobsNextOffset, setJobsNextOffset] = useState<number | null>(null);
   const [uid, setUid] = useState<string | null>(null);
-    // Dashboard filters (client-side)
-    const [recencyDays, setRecencyDays] = useState<number | "all">("all");
-    const [locationFilter, setLocationFilter] = useState("");
-    const [roleMatchOnly, setRoleMatchOnly] = useState(false);
-    const [skillsMatchOnly, setSkillsMatchOnly] = useState(false);
-    const [q, setQ] = useState("");
-  
+  // Dashboard filters (client-side)
+  const [recencyDays, setRecencyDays] = useState<number | "all">("all");
+  const [locationFilter, setLocationFilter] = useState("");
+  const [expFilter, setExpFilter] = useState<"any" | ExperienceLevel>("any");
+  const [roleMatchOnly, setRoleMatchOnly] = useState(false);
+  const [skillsMatchOnly, setSkillsMatchOnly] = useState(false);
+  const [q, setQ] = useState("");
+
   const [jobsErr, setJobsErr] = useState<string | null>(null);
   const [jobsLoadMoreErr, setJobsLoadMoreErr] = useState<string | null>(null);
   const [visitedJobs, setVisitedJobs] = useState<VisitedMap>({});
@@ -80,6 +90,7 @@ export default function Dashboard() {
   } | null>(null);
   const [signingOut, setSigningOut] = useState(false);
   const gmailHarvestedRef = useRef(false);
+  const expInitializedRef = useRef(false);
 
   // Auth guard
   useEffect(() => {
@@ -300,8 +311,21 @@ export default function Dashboard() {
     const roles = p.roles_target || p.roles || [];
     const skills = p.must_have || p.skills || [];
     const locations = p.locations || [];
-    return { roles, skills, locations };
+    const expRaw = (p.experienceLevel || "").toString().toLowerCase();
+    const experienceLevel =
+      expRaw === "entry" || expRaw === "junior" || expRaw === "mid" || expRaw === "senior"
+        ? (expRaw as ExperienceLevel)
+        : undefined;
+    return { roles, skills, locations, experienceLevel };
   }, [profile]);
+
+  useEffect(() => {
+    if (expInitializedRef.current) return;
+    if (persona?.experienceLevel) {
+      setExpFilter(persona.experienceLevel);
+      expInitializedRef.current = true;
+    }
+  }, [persona]);
 
   const handleSignOut = async () => {
     setSigningOut(true);
@@ -398,9 +422,20 @@ export default function Dashboard() {
     const needle = norm(q.trim());
     const locNeedle = norm(locationFilter.trim());
     const personaSkills = persona?.skills || [];
+    const expLimit =
+      expFilter === "any"
+        ? null
+        : expFilter === "entry"
+          ? levelRank("junior")
+          : expFilter === "junior"
+            ? levelRank("mid")
+            : expFilter === "mid"
+              ? levelRank("mid")
+              : levelRank("senior");
 
     return jobs.filter((j) => {
-      const title = norm(j.title ?? "");
+      const titleText = j.title || j.role || "";
+      const title = norm(titleText);
       const company = norm(j.company ?? "");
       const location = norm(j.location ?? "");
 
@@ -449,9 +484,23 @@ export default function Dashboard() {
         if (!ok) return false;
       }
 
+      if (expLimit !== null) {
+        const jobExp = inferExperienceFromTitle(titleText);
+        if (levelRank(jobExp) > expLimit) return false;
+      }
+
       return true;
     });
-  }, [jobs, q, locationFilter, recencyDays, roleMatchOnly, skillsMatchOnly, persona]);
+  }, [
+    jobs,
+    q,
+    locationFilter,
+    recencyDays,
+    roleMatchOnly,
+    skillsMatchOnly,
+    persona,
+    expFilter,
+  ]);
 
   const showTrialBanner =
     !billingLoading && isTrialActive && !isPaid && !isAdmin;
@@ -671,6 +720,24 @@ export default function Dashboard() {
                 />
               </label>
 
+              <label className="dash-filter-label">
+                Experience
+                <select
+                  className="dash-filter-select"
+                  value={expFilter}
+                  onChange={(e) =>
+                    setExpFilter(e.target.value as "any" | ExperienceLevel)
+                  }
+                >
+                  <option value="any">Any</option>
+                  {EXPERIENCE_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
               <label className="dash-filter-toggle">
                 <input
                   type="checkbox"
@@ -739,51 +806,60 @@ export default function Dashboard() {
                     <tr>
                       <th>Title</th>
                       <th>Company</th>
+                      <th>Experience</th>
                       <th>Location</th>
                       <th>Link</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredJobs.map((j, idx) => (
-                      <tr key={String(j.id ?? idx)}>
-                        <td className="dash-td-strong">{j.title || "-"}</td>
-                        <td>{j.company || "-"}</td>
-                        <td>{j.location || "-"}</td>
-                      <td>
-                        {j.url ? (
-                          <a
-                            className="dash-a"
-                            href={j.url}
-                            target="_blank"
-                            rel="noreferrer"
-                            onClick={() => {
-                              const jobKey = j.id ?? j.url;
-                              if (!jobKey) return;
-                              setVisitedJobs(
-                                markVisited(uid || undefined, jobKey)
-                              );
-                            }}
-                            style={{
-                              color: visitedJobs[String(j.id ?? j.url)]
-                                ? "rgba(15,23,42,0.45)"
-                                : undefined,
-                            }}
-                            title={
-                              visitedJobs[String(j.id ?? j.url)]
-                                ? `Opened ${new Date(
-                                    visitedJobs[String(j.id ?? j.url)]
-                                  ).toLocaleString()}`
-                                : "Open job link"
-                            }
-                          >
-                            {visitedJobs[String(j.id ?? j.url)] ? "Opened" : "Open"}
-                          </a>
-                        ) : (
-                          "-"
-                        )}
-                      </td>
-                    </tr>
-                  ))}
+                    {filteredJobs.map((j, idx) => {
+                      const jobExp = inferExperienceFromTitle(
+                        j.title || j.role || ""
+                      );
+                      return (
+                        <tr key={String(j.id ?? idx)}>
+                          <td className="dash-td-strong">{j.title || "-"}</td>
+                          <td>{j.company || "-"}</td>
+                          <td>{prettyExperience(jobExp)}</td>
+                          <td>{j.location || "-"}</td>
+                          <td>
+                            {j.url ? (
+                              <a
+                                className="dash-a"
+                                href={j.url}
+                                target="_blank"
+                                rel="noreferrer"
+                                onClick={() => {
+                                  const jobKey = j.id ?? j.url;
+                                  if (!jobKey) return;
+                                  setVisitedJobs(
+                                    markVisited(uid || undefined, jobKey)
+                                  );
+                                }}
+                                style={{
+                                  color: visitedJobs[String(j.id ?? j.url)]
+                                    ? "rgba(15,23,42,0.45)"
+                                    : undefined,
+                                }}
+                                title={
+                                  visitedJobs[String(j.id ?? j.url)]
+                                    ? `Opened ${new Date(
+                                        visitedJobs[String(j.id ?? j.url)]
+                                      ).toLocaleString()}`
+                                    : "Open job link"
+                                }
+                              >
+                                {visitedJobs[String(j.id ?? j.url)]
+                                  ? "Opened"
+                                  : "Open"}
+                              </a>
+                            ) : (
+                              "-"
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
