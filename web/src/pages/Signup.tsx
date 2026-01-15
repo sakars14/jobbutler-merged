@@ -9,6 +9,7 @@ import { doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
 import { auth, db } from "../firebase";
 import { api } from "../lib/api";
 import TagInput from "../components/TagInput";
+import { EXPERIENCE_OPTIONS, type ExperienceLevel } from "../utils/experience";
 
 const ROLE_SUGG = [
   "Data Analyst",
@@ -52,6 +53,8 @@ export default function Signup() {
   const [fullName, setFullName] = useState("");
   const [dob, setDob] = useState(""); // YYYY-MM-DD
   const [profession, setProfession] = useState("");
+  const [experienceLevel, setExperienceLevel] =
+    useState<ExperienceLevel>("mid");
   const [email, setEmail] = useState("");
   const [city, setCity] = useState("");
   const [stateName, setStateName] = useState("");
@@ -103,11 +106,22 @@ export default function Signup() {
         const data = snap.data() as any;
         const address = data.address || {};
         const persona = data.persona || {};
+        const expRaw = (
+          persona.experienceLevel ||
+          persona.experience_level ||
+          persona.experience ||
+          ""
+        ).toString();
+        const expNorm = expRaw.trim().toLowerCase();
+        const expValue = ["entry", "junior", "mid", "senior"].includes(expNorm)
+          ? (expNorm as ExperienceLevel)
+          : "mid";
 
         prefillDone.current = true;
         setFullName(data.fullName || data.name || "");
         setDob(data.dob || "");
         setProfession(data.profession || "");
+        setExperienceLevel(expValue);
         setEmail(data.email || "");
         setCity(address.city || "");
         setStateName(address.state || "");
@@ -196,6 +210,7 @@ export default function Signup() {
         roles,
         skills,
         locations,
+        experienceLevel,
       },
       updatedAt: serverTimestamp(),
       createdAt: serverTimestamp(),
@@ -211,6 +226,7 @@ export default function Signup() {
         roles_target: roles,
         must_have: skills,
         locations,
+        experienceLevel,
       };
       await api.post("/persona", { uid, persona: personaPayload });
 
@@ -345,6 +361,23 @@ export default function Signup() {
                   }}
                   placeholder="e.g., Senior Data Analyst"
                 />
+              </div>
+
+              <div className="stack">
+                <label>Experience level</label>
+                <select
+                  value={experienceLevel}
+                  onChange={(e) => {
+                    markEdited();
+                    setExperienceLevel(e.target.value as ExperienceLevel);
+                  }}
+                >
+                  {EXPERIENCE_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               <div className="stack">
