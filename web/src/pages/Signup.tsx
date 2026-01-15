@@ -9,7 +9,11 @@ import { doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
 import { auth, db } from "../firebase";
 import { api } from "../lib/api";
 import TagInput from "../components/TagInput";
-import { EXPERIENCE_OPTIONS, type ExperienceLevel } from "../utils/experience";
+import {
+  EXPERIENCE_OPTIONS,
+  EXPERIENCE_VALUES,
+  type ExperienceOptionValue,
+} from "../utils/experience";
 
 const ROLE_SUGG = [
   "Data Analyst",
@@ -54,7 +58,7 @@ export default function Signup() {
   const [dob, setDob] = useState(""); // YYYY-MM-DD
   const [profession, setProfession] = useState("");
   const [experienceLevel, setExperienceLevel] =
-    useState<ExperienceLevel>("mid");
+    useState<ExperienceOptionValue>("mid");
   const [email, setEmail] = useState("");
   const [city, setCity] = useState("");
   const [stateName, setStateName] = useState("");
@@ -113,8 +117,10 @@ export default function Signup() {
           ""
         ).toString();
         const expNorm = expRaw.trim().toLowerCase();
-        const expValue = ["entry", "junior", "mid", "senior"].includes(expNorm)
-          ? (expNorm as ExperienceLevel)
+        const expValue = EXPERIENCE_VALUES.includes(
+          expNorm as ExperienceOptionValue
+        )
+          ? (expNorm as ExperienceOptionValue)
           : "mid";
 
         prefillDone.current = true;
@@ -369,7 +375,9 @@ export default function Signup() {
                   value={experienceLevel}
                   onChange={(e) => {
                     markEdited();
-                    setExperienceLevel(e.target.value as ExperienceLevel);
+                    setExperienceLevel(
+                      e.target.value as ExperienceOptionValue
+                    );
                   }}
                 >
                   {EXPERIENCE_OPTIONS.map((opt) => (

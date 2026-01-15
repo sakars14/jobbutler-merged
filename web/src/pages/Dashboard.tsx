@@ -9,10 +9,11 @@ import { formatDdHhMmSsFromMs, formatHhMmFromMs } from "../billing/billingStore"
 import { loadVisited, markVisited, type VisitedMap } from "../lib/visitedJobs";
 import {
   EXPERIENCE_OPTIONS,
+  EXPERIENCE_VALUES,
   inferExperienceFromTitle,
   levelRank,
   prettyExperience,
-  type ExperienceLevel,
+  type ExperienceOptionValue,
 } from "../utils/experience";
 
 type PersonaShape = {
@@ -21,7 +22,7 @@ type PersonaShape = {
   locations?: string[];
   roles?: string[];
   skills?: string[];
-  experienceLevel?: ExperienceLevel;
+  experienceLevel?: ExperienceOptionValue;
 };
 
 type UserProfile = {
@@ -69,7 +70,7 @@ export default function Dashboard() {
   // Dashboard filters (client-side)
   const [recencyDays, setRecencyDays] = useState<number | "all">("all");
   const [locationFilter, setLocationFilter] = useState("");
-  const [expFilter, setExpFilter] = useState<"any" | ExperienceLevel>("any");
+  const [expFilter, setExpFilter] = useState<ExperienceOptionValue>("any");
   const [roleMatchOnly, setRoleMatchOnly] = useState(false);
   const [skillsMatchOnly, setSkillsMatchOnly] = useState(false);
   const [q, setQ] = useState("");
@@ -312,10 +313,11 @@ export default function Dashboard() {
     const skills = p.must_have || p.skills || [];
     const locations = p.locations || [];
     const expRaw = (p.experienceLevel || "").toString().toLowerCase();
-    const experienceLevel =
-      expRaw === "entry" || expRaw === "junior" || expRaw === "mid" || expRaw === "senior"
-        ? (expRaw as ExperienceLevel)
-        : undefined;
+    const experienceLevel = EXPERIENCE_VALUES.includes(
+      expRaw as ExperienceOptionValue
+    )
+      ? (expRaw as ExperienceOptionValue)
+      : undefined;
     return { roles, skills, locations, experienceLevel };
   }, [profile]);
 
@@ -422,16 +424,7 @@ export default function Dashboard() {
     const needle = norm(q.trim());
     const locNeedle = norm(locationFilter.trim());
     const personaSkills = persona?.skills || [];
-    const expLimit =
-      expFilter === "any"
-        ? null
-        : expFilter === "entry"
-          ? levelRank("junior")
-          : expFilter === "junior"
-            ? levelRank("mid")
-            : expFilter === "mid"
-              ? levelRank("mid")
-              : levelRank("senior");
+    const expLimit = expFilter === "any" ? null : levelRank(expFilter);
 
     return jobs.filter((j) => {
       const titleText = j.title || j.role || "";
@@ -597,14 +590,19 @@ export default function Dashboard() {
 
         {/* 4 cards */}
         <section className="dash-tiles">
-          {/* Persona */}
-          <div className="dash-tile">
-            <div className="dash-tile-top">
-              <h3 className="dash-tile-title">Persona</h3>
-              <button className="dash-mini" type="button" onClick={() => nav("/signup")}>
-                Edit
-              </button>
-            </div>
+{/* Persona */}
+<div className="dash-tile">
+  <div className="dash-tile-top">
+    <h3 className="dash-tile-title">Persona</h3>
+    <button
+      className="dash-mini dash-edit-btn"
+      type="button"
+      onClick={() => nav("/signup")}
+    >
+      Edit
+    </button>
+  </div>
+
 
             {!persona ? (
               <p className="dash-muted">No persona found yet. Click Edit.</p>
@@ -641,7 +639,7 @@ export default function Dashboard() {
           </div>
 
           {/* Gmail */}
-          <div className="dash-tile">
+          <div className="dash-tile h-full">
             <div className="dash-tile-top">
               <h3 className="dash-tile-title">Gmail</h3>
               <span className={`dash-status ${gmailConnected ? "ok" : "warn"}`}>
@@ -689,7 +687,7 @@ export default function Dashboard() {
             {gmailErr && <div className="dash-error">{gmailErr}</div>}
           </div>
 
-          <div className="dash-tile">
+          <div className="dash-tile h-full">
             <div className="dash-tile-title">Filters</div>
 
             <div className="dash-filter-grid">
@@ -726,10 +724,9 @@ export default function Dashboard() {
                   className="dash-filter-select"
                   value={expFilter}
                   onChange={(e) =>
-                    setExpFilter(e.target.value as "any" | ExperienceLevel)
+                    setExpFilter(e.target.value as ExperienceOptionValue)
                   }
                 >
-                  <option value="any">Any</option>
                   {EXPERIENCE_OPTIONS.map((opt) => (
                     <option key={opt.value} value={opt.value}>
                       {opt.label}
@@ -738,25 +735,7 @@ export default function Dashboard() {
                 </select>
               </label>
 
-              <label className="dash-filter-toggle">
-                <input
-                  type="checkbox"
-                  checked={roleMatchOnly}
-                  onChange={(e) => setRoleMatchOnly(e.target.checked)}
-                />
-                Role match only
-              </label>
-
-              <label className="dash-filter-toggle">
-                <input
-                  type="checkbox"
-                  checked={skillsMatchOnly}
-                  onChange={(e) => setSkillsMatchOnly(e.target.checked)}
-                />
-                Skills match only
-              </label>
-
-              <label className="dash-filter-label dash-filter-span2">
+              <label className="dash-filter-label">
                 Search
                 <input
                   className="dash-filter-input"
@@ -765,6 +744,27 @@ export default function Dashboard() {
                   placeholder="title / company / location"
                 />
               </label>
+
+              <div className="dash-filter-span2 dash-filter-row">
+  <label className="dash-filter-toggle">
+    <input
+      type="checkbox"
+      checked={roleMatchOnly}
+      onChange={(e) => setRoleMatchOnly(e.target.checked)}
+    />
+    <span>Role match only</span>
+  </label>
+
+  <label className="dash-filter-toggle">
+    <input
+      type="checkbox"
+      checked={skillsMatchOnly}
+      onChange={(e) => setSkillsMatchOnly(e.target.checked)}
+    />
+    <span>Skills match only</span>
+  </label>
+</div>
+
             </div>
           </div>
 

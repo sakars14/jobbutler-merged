@@ -914,6 +914,13 @@ body {
   font-size: 12px;
 }
 
+.dash-edit-btn{
+  position: absolute;
+  top: 14px;
+  right: 16px;
+  z-index: 2;
+}
+
 .dash-hero{
   padding: 6px 2px 18px;
 }
@@ -937,7 +944,7 @@ body {
 
 .dash-tiles{
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: 1.4fr 0.9fr 1.3fr;
   gap: 16px;
   margin-top: 8px;
 }
@@ -953,8 +960,9 @@ body {
   background: #fff;
   border-radius: 18px;
   box-shadow: 0 14px 40px rgba(0,0,0,0.08);
-  padding: 16px 16px 14px;
-  min-height: 150px;
+  padding: 14px 16px 12px;
+  min-height: 130px;
+  position: relative;
 }
 
 .dash-tile-top{
@@ -1105,8 +1113,8 @@ body {
 .dash-filter-grid{
   display:grid;
   grid-template-columns: 1fr 1fr;
-  gap:12px;
-  margin-top:10px;
+  gap:10px;
+  margin-top:8px;
 }
 .dash-filter-label{
   display:flex;
@@ -1131,3 +1139,12 @@ body {
   margin-top:18px;
 }
 .dash-filter-span2{ grid-column: 1 / -1; }
+.dash-filter-row{
+  display:flex;
+  flex-wrap:wrap;
+  gap:16px;
+  align-items:center;
+}
+.dash-filter-row .dash-filter-toggle{
+  margin-top:0;
+}
