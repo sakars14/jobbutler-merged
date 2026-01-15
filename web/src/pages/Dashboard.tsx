@@ -590,14 +590,19 @@ export default function Dashboard() {
 
         {/* 4 cards */}
         <section className="dash-tiles">
-          {/* Persona */}
-          <div className="dash-tile">
-            <div className="dash-tile-top">
-              <h3 className="dash-tile-title">Persona</h3>
-              <button className="dash-mini" type="button" onClick={() => nav("/signup")}>
-                Edit
-              </button>
-            </div>
+{/* Persona */}
+<div className="dash-tile">
+  <div className="dash-tile-top">
+    <h3 className="dash-tile-title">Persona</h3>
+    <button
+      className="dash-mini dash-edit-btn"
+      type="button"
+      onClick={() => nav("/signup")}
+    >
+      Edit
+    </button>
+  </div>
+
 
             {!persona ? (
               <p className="dash-muted">No persona found yet. Click Edit.</p>
@@ -634,7 +639,7 @@ export default function Dashboard() {
           </div>
 
           {/* Gmail */}
-          <div className="dash-tile">
+          <div className="dash-tile h-full">
             <div className="dash-tile-top">
               <h3 className="dash-tile-title">Gmail</h3>
               <span className={`dash-status ${gmailConnected ? "ok" : "warn"}`}>
@@ -682,7 +687,7 @@ export default function Dashboard() {
             {gmailErr && <div className="dash-error">{gmailErr}</div>}
           </div>
 
-          <div className="dash-tile">
+          <div className="dash-tile h-full">
             <div className="dash-tile-title">Filters</div>
 
             <div className="dash-filter-grid">
@@ -740,25 +745,26 @@ export default function Dashboard() {
                 />
               </label>
 
-              <div className="dash-filter-row dash-filter-span2">
-                <label className="dash-filter-toggle">
-                  <input
-                    type="checkbox"
-                    checked={roleMatchOnly}
-                    onChange={(e) => setRoleMatchOnly(e.target.checked)}
-                  />
-                  Role match only
-                </label>
+              <div className="dash-filter-span2 dash-filter-row">
+  <label className="dash-filter-toggle">
+    <input
+      type="checkbox"
+      checked={roleMatchOnly}
+      onChange={(e) => setRoleMatchOnly(e.target.checked)}
+    />
+    <span>Role match only</span>
+  </label>
 
-                <label className="dash-filter-toggle">
-                  <input
-                    type="checkbox"
-                    checked={skillsMatchOnly}
-                    onChange={(e) => setSkillsMatchOnly(e.target.checked)}
-                  />
-                  Skills match only
-                </label>
-              </div>
+  <label className="dash-filter-toggle">
+    <input
+      type="checkbox"
+      checked={skillsMatchOnly}
+      onChange={(e) => setSkillsMatchOnly(e.target.checked)}
+    />
+    <span>Skills match only</span>
+  </label>
+</div>
+
             </div>
           </div>
 

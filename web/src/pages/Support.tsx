@@ -91,12 +91,7 @@ export default function Support() {
           orderBy("createdAt", "desc"),
           limit(20)
         )
-      : query(
-          collection(db, "supportRequests"),
-          where("uid", "==", uid),
-          orderBy("createdAt", "desc"),
-          limit(20)
-        );
+      : query(collection(db, "supportRequests"), where("uid", "==", uid));
 
     const unsub = onSnapshot(
       q,

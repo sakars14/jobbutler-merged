@@ -914,6 +914,13 @@ body {
   font-size: 12px;
 }
 
+.dash-edit-btn{
+  position: absolute;
+  top: 14px;
+  right: 16px;
+  z-index: 2;
+}
+
 .dash-hero{
   padding: 6px 2px 18px;
 }
@@ -955,6 +962,7 @@ body {
   box-shadow: 0 14px 40px rgba(0,0,0,0.08);
   padding: 14px 16px 12px;
   min-height: 130px;
+  position: relative;
 }
 
 .dash-tile-top{
