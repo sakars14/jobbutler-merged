@@ -4,20 +4,62 @@ from typing import List
 from .sources import JobPosting, dedupe
 
 DEFAULT_TITLES = [
-    "Senior Data Analyst","Analytics Manager","Lead Data Analyst",
-    "Product Analytics","Data Science Manager","AI Analyst","ML Analyst","Business Intelligence"
+    "Senior Data Analyst",
+    "Analytics Manager",
+    "Lead Data Analyst",
+    "Product Analytics",
+    "Data Science Manager",
+    "AI Analyst",
+    "ML Analyst",
+    "Business Intelligence",
 ]
+
+_QUALIFIER_PREFIXES = {
+    "senior",
+    "sr",
+    "lead",
+    "junior",
+    "jr",
+    "entry",
+    "intern",
+    "internship",
+    "trainee",
+    "fresher",
+}
+
+def _strip_qualifiers(term: str) -> str:
+    parts = [p for p in term.strip().split() if p]
+    while parts and parts[0].lower().strip(".") in _QUALIFIER_PREFIXES:
+        parts.pop(0)
+    return " ".join(parts).strip()
+
+def _expand_role_variants(term: str) -> list[str]:
+    base = _strip_qualifiers(term)
+    if not base:
+        return []
+    return [
+        base,
+        f"Junior {base}",
+        f"Entry {base}",
+        f"Intern {base}",
+        f"Senior {base}",
+        f"Lead {base}",
+    ]
 
 def _queries(profile: dict) -> list[str]:
     titles = profile.get("roles_target", []) or []
     must   = profile.get("must_have", []) or []
     # keep them short; Adzuna prefers compact 'what' terms
     uniq = []
-    for q in [*titles, *DEFAULT_TITLES, *must]:
+    for q in [*titles, *DEFAULT_TITLES]:
+        for variant in _expand_role_variants(q):
+            if variant.lower() not in [u.lower() for u in uniq]:
+                uniq.append(variant)
+    for q in must:
         q = (q or "").strip()
         if q and q.lower() not in [u.lower() for u in uniq]:
             uniq.append(q)
-    return uniq[:12]  # cap to avoid too many calls
+    return uniq[:24]  # cap to avoid too many calls
 
 def harvest_adzuna(profile: dict, pages: int = 1, results_per_page: int = 50) -> List[JobPosting]:
     app_id = os.getenv("ADZUNA_APP_ID")
